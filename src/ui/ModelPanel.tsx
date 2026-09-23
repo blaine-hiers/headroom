@@ -216,6 +216,7 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
             integer
             min={256}
             max={BIG * 10}
+            commitOnBlur
             onChange={(v) => onEdit({ maxPositionEmbeddings: v })}
           />
           <NumberField label="Hidden size" value={model.hiddenSize} integer min={0} max={BIG} onChange={(v) => onEdit({ hiddenSize: v })} />

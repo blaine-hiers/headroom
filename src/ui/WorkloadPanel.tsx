@@ -16,7 +16,10 @@ export function WorkloadPanel({ workload, maxContext, onChange }: Props) {
   const sliderId = useId();
   // Log-scale slider over exponents; it snaps to powers of two and the top stop clamps to the model max.
   const maxExp = Math.max(MIN_EXP, Math.ceil(Math.log2(maxContext)));
-  const exp = Math.log2(Math.max(MIN_CONTEXT, workload.contextTokens));
+  // At the model max (often not a power of two, e.g. 40960) the thumb sits on the top stop,
+  // so ArrowLeft steps to the power of two just below it instead of skipping one.
+  const exp =
+    workload.contextTokens >= maxContext ? maxExp : Math.round(Math.log2(Math.max(MIN_CONTEXT, workload.contextTokens)));
   return (
     <section className="panel" aria-labelledby="wl-h">
       <h2 id="wl-h">Workload</h2>
@@ -30,7 +33,7 @@ export function WorkloadPanel({ workload, maxContext, onChange }: Props) {
           min={MIN_EXP}
           max={maxExp}
           step={1}
-          value={Math.round(exp)}
+          value={exp}
           aria-valuetext={`${workload.contextTokens} tokens`}
           onChange={(e) => onChange({ contextTokens: Math.min(maxContext, 2 ** Number(e.target.value)) })}
         />

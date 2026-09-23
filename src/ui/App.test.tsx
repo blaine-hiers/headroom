@@ -151,4 +151,53 @@ describe('App', () => {
     await user.click(within(panel).getByRole('button', { name: /Use the built-in Llama 3.1 8B preset/ }));
     expect(screen.getAllByText('131 KB').length).toBeGreaterThan(0);
   });
+  it('retyping Max position does not clamp the context down to the minimum on the way', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const ctx = screen.getByLabelText('Context tokens', { exact: true });
+    await user.clear(ctx);
+    await user.type(ctx, '32768');
+    await user.tab();
+    expect(ctx).toHaveValue(32768);
+
+    await user.click(screen.getByText('Advanced'));
+    const maxPos = screen.getByLabelText('Max position');
+    await user.clear(maxPos);
+    await user.type(maxPos, '131072'); // "1", "13", "131" are below the 256 minimum
+    await user.tab();
+    expect(maxPos).toHaveValue(131072);
+    expect(ctx).toHaveValue(32768);
+  });
+
+  it('a below-minimum entry is clamped when the field loses focus', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const ctx = screen.getByLabelText('Context tokens', { exact: true });
+    await user.clear(ctx);
+    await user.type(ctx, '10');
+    await user.tab();
+    expect(ctx).toHaveValue(256);
+  });
+
+  it('the context slider sits on its top stop at a non-power-of-two model max', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Qwen3-32B' })); // max 40960
+    const ctx = screen.getByLabelText('Context tokens', { exact: true });
+    await user.clear(ctx);
+    await user.type(ctx, '40960');
+    await user.tab();
+    const slider = screen.getByRole('slider');
+    expect(slider).toHaveValue(slider.getAttribute('max'));
+  });
+  it('tabbing through the Advanced fields leaves a preset untouched', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByText('Advanced'));
+    await user.click(screen.getByLabelText('Parameters')); // shows 70.55 (rounded)
+    await user.tab();
+    await user.click(screen.getByLabelText('Max position'));
+    await user.tab();
+    expect(screen.getByText('· built-in preset')).toBeInTheDocument();
+  });
 });

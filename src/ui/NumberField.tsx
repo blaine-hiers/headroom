@@ -16,6 +16,11 @@ interface Props {
   suffix?: string;
   help?: ReactNode;
   className?: string;
+  /**
+   * Commit only on blur or Enter, not per keystroke. For fields whose partial values would
+   * clamp other state (Max position caps the workload context).
+   */
+  commitOnBlur?: boolean;
 }
 
 function show(v: number, decimals: number | undefined): string {
@@ -40,15 +45,21 @@ export function NumberField({
   suffix,
   help,
   className,
+  commitOnBlur = false,
 }: Props) {
   const id = useId();
   const helpId = `${id}-help`;
   const [draft, setDraft] = useState<string | null>(null);
+  const edited = draft !== null && draft !== show(value, decimals);
 
-  const commit = (raw: string) => {
+  // While typing, a value below `min` is usually a prefix of a bigger number ("4" on the way
+  // to "4096"); committing it clamped would push dependent state (e.g. the workload context)
+  // down to the minimum for good. Hold it until blur, then clamp.
+  const commit = (raw: string, final = false) => {
     if (raw.trim() === '') return;
     const n = Number(raw);
     if (!Number.isFinite(n)) return;
+    if (!final && n < min) return;
     let v = clamp(n, min, max);
     if (integer) v = Math.round(v);
     onChange(v);
@@ -70,9 +81,16 @@ export function NumberField({
           onFocus={() => setDraft(show(value, decimals))}
           onChange={(e) => {
             setDraft(e.target.value);
-            commit(e.target.value);
+            if (!commitOnBlur) commit(e.target.value);
           }}
-          onBlur={() => setDraft(null)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && edited) commit(draft, true);
+          }}
+          onBlur={() => {
+            // Only an edited draft commits: tabbing through must not round a value or mark it manual.
+            if (edited) commit(draft, true);
+            setDraft(null);
+          }}
         />
         {suffix && <span className="suffix">{suffix}</span>}
       </div>
