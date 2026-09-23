@@ -1,0 +1,170 @@
+import { KV_QUANTS, WEIGHT_QUANTS } from './quant';
+import type {
+  Attention,
+  CalcState,
+  KvQuantKey,
+  ModelSpec,
+  NativeDtype,
+  WeightQuantKey,
+} from './types';
+
+// Compact query-string keys. Changing one breaks existing shared links.
+const K = {
+  id: 'id',
+  name: 'n',
+  params: 'p',
+  activeParams: 'ap',
+  numLayers: 'l',
+  attention: 'at',
+  numKvHeads: 'kh',
+  headDim: 'hd',
+  kvLoraRank: 'kr',
+  qkRopeHeadDim: 'qr',
+  slidingWindow: 'sw',
+  slidingLayers: 'sl',
+  maxPositionEmbeddings: 'mp',
+  hiddenSize: 'hs',
+  vocabSize: 'vs',
+  nativeDtype: 'dt',
+  moe: 'moe',
+  source: 'src',
+  warnings: 'w',
+  weightQuant: 'wq',
+  kvQuant: 'kq',
+  gpuName: 'g',
+  gpuCount: 'gc',
+  vramGB: 'vr',
+  bandwidthGBs: 'bw',
+  reservePct: 'rp',
+  overheadGB: 'oh',
+  contextTokens: 'c',
+  concurrentUsers: 'u',
+} as const;
+
+const ATTENTIONS: readonly Attention[] = ['mha_gqa', 'mla'];
+const DTYPES: readonly NativeDtype[] = ['bf16', 'fp16', 'fp32', 'fp8'];
+const SOURCES: readonly ModelSpec['source'][] = ['hf', 'preset', 'manual'];
+
+export function encodeState(state: CalcState): string {
+  const q = new URLSearchParams();
+  const m = state.model;
+  const set = (k: string, v: string | number | undefined) => {
+    if (v !== undefined) q.set(k, String(v));
+  };
+  set(K.id, m.id);
+  set(K.name, m.name);
+  set(K.params, m.params);
+  set(K.activeParams, m.activeParams);
+  set(K.numLayers, m.numLayers);
+  set(K.attention, m.attention);
+  set(K.numKvHeads, m.numKvHeads);
+  set(K.headDim, m.headDim);
+  set(K.kvLoraRank, m.kvLoraRank);
+  set(K.qkRopeHeadDim, m.qkRopeHeadDim);
+  set(K.slidingWindow, m.slidingWindow);
+  set(K.slidingLayers, m.slidingLayers);
+  set(K.maxPositionEmbeddings, m.maxPositionEmbeddings);
+  set(K.hiddenSize, m.hiddenSize);
+  set(K.vocabSize, m.vocabSize);
+  set(K.nativeDtype, m.nativeDtype);
+  if (m.moe) set(K.moe, `${m.moe.numExperts},${m.moe.expertsPerToken},${m.moe.sharedExperts}`);
+  set(K.source, m.source);
+  for (const w of m.warnings) q.append(K.warnings, w);
+  set(K.weightQuant, state.quant.weight);
+  set(K.kvQuant, state.quant.kv);
+  const h = state.hardware;
+  set(K.gpuName, h.gpuName);
+  set(K.gpuCount, h.gpuCount);
+  set(K.vramGB, h.vramGB);
+  set(K.bandwidthGBs, h.bandwidthGBs);
+  set(K.reservePct, h.reservePct);
+  set(K.overheadGB, h.overheadGB);
+  set(K.contextTokens, state.workload.contextTokens);
+  set(K.concurrentUsers, state.workload.concurrentUsers);
+  return q.toString();
+}
+
+class BadState extends Error {}
+
+function oneOf<T extends string>(v: string | null, allowed: readonly T[]): T {
+  if (v === null || !(allowed as readonly string[]).includes(v)) throw new BadState();
+  return v as T;
+}
+
+/**
+ * Decode a query string (with or without the leading "?"). Any missing or invalid
+ * required field returns `fallback` unchanged; partial states are never produced.
+ */
+export function decodeState(qs: string, fallback: CalcState): CalcState {
+  try {
+    const q = new URLSearchParams(qs.startsWith('?') ? qs.slice(1) : qs);
+    if (!q.has(K.id)) return fallback;
+
+    const str = (k: string): string => {
+      const v = q.get(k);
+      if (v === null) throw new BadState();
+      return v;
+    };
+    const num = (k: string): number => {
+      const raw = q.get(k);
+      if (raw === null || raw.trim() === '') throw new BadState();
+      const n = Number(raw);
+      if (!Number.isFinite(n)) throw new BadState();
+      return n;
+    };
+    const optNum = (k: string): number | undefined => (q.has(k) ? num(k) : undefined);
+
+    const model: ModelSpec = {
+      id: str(K.id),
+      name: str(K.name),
+      params: num(K.params),
+      activeParams: num(K.activeParams),
+      numLayers: num(K.numLayers),
+      attention: oneOf(q.get(K.attention), ATTENTIONS),
+      numKvHeads: num(K.numKvHeads),
+      headDim: num(K.headDim),
+      maxPositionEmbeddings: num(K.maxPositionEmbeddings),
+      hiddenSize: num(K.hiddenSize),
+      vocabSize: num(K.vocabSize),
+      nativeDtype: oneOf(q.get(K.nativeDtype), DTYPES),
+      source: oneOf(q.get(K.source), SOURCES),
+      warnings: q.getAll(K.warnings),
+    };
+    const kvLoraRank = optNum(K.kvLoraRank);
+    const qkRopeHeadDim = optNum(K.qkRopeHeadDim);
+    const slidingWindow = optNum(K.slidingWindow);
+    const slidingLayers = optNum(K.slidingLayers);
+    if (kvLoraRank !== undefined) model.kvLoraRank = kvLoraRank;
+    if (qkRopeHeadDim !== undefined) model.qkRopeHeadDim = qkRopeHeadDim;
+    if (slidingWindow !== undefined) model.slidingWindow = slidingWindow;
+    if (slidingLayers !== undefined) model.slidingLayers = slidingLayers;
+    const moeRaw = q.get(K.moe);
+    if (moeRaw !== null) {
+      const parts = moeRaw.split(',').map((s) => (s.trim() === '' ? NaN : Number(s)));
+      if (parts.length !== 3 || !parts.every(Number.isFinite)) throw new BadState();
+      model.moe = { numExperts: parts[0], expertsPerToken: parts[1], sharedExperts: parts[2] };
+    }
+
+    return {
+      model,
+      quant: {
+        weight: oneOf(q.get(K.weightQuant), Object.keys(WEIGHT_QUANTS) as WeightQuantKey[]),
+        kv: oneOf(q.get(K.kvQuant), Object.keys(KV_QUANTS) as KvQuantKey[]),
+      },
+      hardware: {
+        gpuName: str(K.gpuName),
+        gpuCount: num(K.gpuCount),
+        vramGB: num(K.vramGB),
+        bandwidthGBs: num(K.bandwidthGBs),
+        reservePct: num(K.reservePct),
+        overheadGB: num(K.overheadGB),
+      },
+      workload: {
+        contextTokens: num(K.contextTokens),
+        concurrentUsers: num(K.concurrentUsers),
+      },
+    };
+  } catch {
+    return fallback;
+  }
+}
