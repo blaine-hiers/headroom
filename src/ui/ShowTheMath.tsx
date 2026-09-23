@@ -1,0 +1,141 @@
+import type { ReactNode } from 'react';
+import {
+  activeParams,
+  DECODE_EFFICIENCY,
+  effectiveSlidingLayers,
+  formatNumber,
+  KV_QUANTS,
+  kvBytesPerTokenPerLayer,
+  WEIGHT_QUANTS,
+  weightBytes,
+} from '../lib';
+import type { CalcResult, CalcState } from '../lib';
+import { Bytes } from './Bytes';
+
+interface Props {
+  state: CalcState;
+  result: CalcResult;
+}
+
+const n = (v: number, d = 0) => formatNumber(v, d);
+
+function Step({ title, formula, sub, result }: { title: string; formula: string; sub: ReactNode; result: ReactNode }) {
+  return (
+    <li className="math-step">
+      <h4>{title}</h4>
+      <code className="formula">{formula}</code>
+      <code className="sub">
+        = {sub} = {result}
+      </code>
+    </li>
+  );
+}
+
+export function ShowTheMath({ state, result }: Props) {
+  const { model, quant, hardware: hw, workload } = state;
+  const kvB = KV_QUANTS[quant.kv].bytesPerElement;
+  const bits = WEIGHT_QUANTS[quant.weight].bitsPerWeight;
+  const perLayer = kvBytesPerTokenPerLayer(model, quant.kv);
+  const sliding = effectiveSlidingLayers(model);
+  const full = model.numLayers - sliding;
+  const C = Math.floor(workload.contextTokens);
+  const N = Math.floor(workload.concurrentUsers);
+  const fixed = result.weightBytes + result.overheadBytes;
+  const active = activeParams(model.params, model.moe);
+  const activeBytes = weightBytes(active, quant.weight);
+  const B = (v: number) => <Bytes value={v} />;
+  const maxU = result.maxUsersAtContext;
+
+  return (
+    <details className="card math">
+      <summary>Show the math</summary>
+      <ol>
+        {model.attention === 'mla' ? (
+          <Step
+            title="KV per token (MLA)"
+            formula="layers × (kv_lora_rank + qk_rope_head_dim) × kvBytes"
+            sub={`${n(model.numLayers)} × (${n(model.kvLoraRank ?? 0)} + ${n(model.qkRopeHeadDim ?? 0)}) × ${kvB}`}
+            result={<>{n(result.kvBytesPerToken)} B ({B(result.kvBytesPerToken)})</>}
+          />
+        ) : (
+          <Step
+            title="KV per token"
+            formula="2 × layers × kvHeads × headDim × kvBytes"
+            sub={`2 × ${n(model.numLayers)} × ${n(model.numKvHeads)} × ${n(model.headDim)} × ${kvB}`}
+            result={<>{n(result.kvBytesPerToken)} B ({B(result.kvBytesPerToken)})</>}
+          />
+        )}
+        {sliding > 0 ? (
+          <Step
+            title="KV per request (sliding-window split)"
+            formula="perLayer × (fullLayers × C + slidingLayers × min(C, window))"
+            sub={`${n(perLayer)} × (${n(full)} × ${n(C)} + ${n(sliding)} × ${n(Math.min(C, model.slidingWindow ?? 0))})`}
+            result={B(result.kvBytesPerRequest)}
+          />
+        ) : (
+          <Step
+            title="KV per request"
+            formula="KV per token × C"
+            sub={`${n(result.kvBytesPerToken)} × ${n(C)}`}
+            result={B(result.kvBytesPerRequest)}
+          />
+        )}
+        <Step title="KV for all users" formula="KV per request × N" sub={`${n(result.kvBytesPerRequest)} × ${n(N)}`} result={B(result.kvBytesAllUsers)} />
+        <Step
+          title="Weights"
+          formula="params × bitsPerWeight / 8"
+          sub={`${n(model.params)} × ${bits} / 8`}
+          result={B(result.weightBytes)}
+        />
+        <Step
+          title="Usable VRAM"
+          formula="gpuCount × vramGB × 1e9 × (1 − reserve%/100)"
+          sub={`${n(hw.gpuCount)} × ${n(hw.vramGB, 2)} × 1e9 × (1 − ${n(hw.reservePct, 2)}/100)`}
+          result={B(result.usableBytes)}
+        />
+        <Step
+          title="Total VRAM"
+          formula="weights + overheadGB × 1e9 × gpuCount + N × KV per request"
+          sub={
+            <>
+              {formatNumber(result.weightBytes)} + {n(hw.overheadGB, 2)} × 1e9 × {n(hw.gpuCount)} + {n(N)} × {n(result.kvBytesPerRequest)}
+            </>
+          }
+          result={
+            <>
+              {B(result.totalBytes)} ({result.fits ? 'fits' : 'does not fit'} in {formatNumber(result.usableBytes)} B)
+            </>
+          }
+        />
+        <Step
+          title="Max users at C"
+          formula="floor((usable − fixed) / KV per request)"
+          sub={`floor((${n(result.usableBytes)} − ${n(fixed)}) / ${n(result.kvBytesPerRequest)})`}
+          result={Number.isFinite(maxU) ? n(maxU) : '∞'}
+        />
+        <Step
+          title="Max context for N users"
+          formula="min(maxPosition, floor((usable − fixed) / (N × KV per token)))"
+          sub={`min(${n(model.maxPositionEmbeddings)}, floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)})))`}
+          result={`${n(result.maxContextForUsers)} tokens`}
+        />
+        <Step
+          title="Decode throughput"
+          formula="bandwidthGBs × 1e9 × gpuCount × efficiency / (activeWeights + N × KV per request)"
+          sub={
+            <>
+              {n(hw.bandwidthGBs)} × 1e9 × {n(hw.gpuCount)} × {DECODE_EFFICIENCY} / ({n(activeBytes)} + {n(N)} × {n(result.kvBytesPerRequest)})
+            </>
+          }
+          result={`${n(result.throughput.perUserTokS, 1)} tok/s per user, ${n(result.throughput.aggregateTokS, 1)} tok/s aggregate`}
+        />
+      </ol>
+      {model.moe && (
+        <p className="help">
+          Active params (MoE) ≈ params × (perToken + shared) / (experts + shared) = {n(model.params)} × ({model.moe.expertsPerToken} +{' '}
+          {model.moe.sharedExperts}) / ({model.moe.numExperts} + {model.moe.sharedExperts}) = {n(active)}.
+        </p>
+      )}
+    </details>
+  );
+}

@@ -1,0 +1,154 @@
+import { act, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { encodeState } from '../lib';
+import qwenApi from '../lib/__fixtures__/qwen2.5-7b-instruct.api.json';
+import qwenConfig from '../lib/__fixtures__/qwen2.5-7b-instruct.json';
+import App from './App';
+import { defaultState } from './state';
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+function badge(): HTMLElement {
+  const el = document.querySelector<HTMLElement>('.badge');
+  if (!el) throw new Error('fit badge not rendered');
+  return el;
+}
+
+beforeEach(() => {
+  window.localStorage.clear();
+  window.history.replaceState(null, '', '/');
+  delete document.documentElement.dataset.theme;
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+describe('App', () => {
+  it('renders the default Llama 3.3 70B preset with the golden KV figure in both units', () => {
+    render(<App />);
+    expect(screen.getByRole('heading', { level: 1, name: 'Headroom' })).toBeInTheDocument();
+    expect(screen.getByText('Will it fit? For how many? How fast?')).toBeInTheDocument();
+    // 2 × 80 × 8 × 128 × 2 = 327,680 B
+    expect(screen.getAllByText('328 KB').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('320 KiB').length).toBeGreaterThan(0);
+    expect(screen.getByText('· built-in preset')).toBeInTheDocument();
+  });
+
+  it('switching to the Llama 3.1 8B chip changes the KV per token figure', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Llama 3.1 8B' }));
+    // 2 × 32 × 8 × 128 × 2 = 131,072 B
+    expect(screen.getAllByText('131 KB').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('128 KiB').length).toBeGreaterThan(0);
+    expect(screen.queryByText('320 KiB')).not.toBeInTheDocument();
+  });
+
+  it('70B BF16 does not fit on one 4090 and fits on H200s', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    expect(badge()).toHaveTextContent('Does not fit');
+
+    await user.selectOptions(screen.getByLabelText('GPU'), 'H200');
+    // 141 GB of BF16 weights vs 141 GB × 0.95 usable: one H200 is still short.
+    expect(badge()).toHaveTextContent('Does not fit');
+
+    await user.click(screen.getByRole('button', { name: 'Increase gpu count' }));
+    expect(badge()).toHaveTextContent(/^Fits$/);
+  });
+
+  it('a single H200 fits 70B once weights are FP8', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.selectOptions(screen.getByLabelText('GPU'), 'H200');
+    await user.selectOptions(screen.getByLabelText('Weights'), 'fp8');
+    expect(badge()).toHaveTextContent(/^Fits$/);
+  });
+
+  it('Copy link writes the encoded state to the URL and the clipboard', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText');
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Copy link' }));
+    const encoded = encodeState(defaultState);
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText.mock.calls[0][0]).toContain(`?${encoded}`);
+    expect(window.location.search).toBe(`?${encoded}`);
+    expect(await screen.findByText('Copied')).toBeInTheDocument();
+  });
+
+  it('loads state from the URL', () => {
+    const s = { ...defaultState, workload: { contextTokens: 32768, concurrentUsers: 4 } };
+    window.history.replaceState(null, '', `/?${encodeState(s)}`);
+    render(<App />);
+    expect(screen.getByLabelText('Concurrent users')).toHaveValue(4);
+    expect(screen.getByLabelText('Context tokens')).toHaveValue(32768);
+  });
+
+  it('theme toggle flips data-theme and persists the choice', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    await user.click(screen.getByRole('button', { name: 'Switch to light theme' }));
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(window.localStorage.getItem('headroom.theme')).toBe('light');
+    await user.click(screen.getByRole('button', { name: 'Switch to dark theme' }));
+    expect(document.documentElement.dataset.theme).toBe('dark');
+  });
+
+  it('fetches a model from Hugging Face (200)', async () => {
+    const fetchMock = vi.fn((url: string) =>
+      Promise.resolve(url.includes('/api/models/') ? jsonResponse(qwenApi) : jsonResponse(qwenConfig)),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByLabelText('Hugging Face repo id');
+    await user.clear(input);
+    await user.type(input, 'Qwen/Qwen2.5-7B-Instruct{Enter}');
+
+    expect(await screen.findByText('· from Hugging Face')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // 2 × 28 × 4 × 128 × 2 = 57,344 B
+    expect(screen.getAllByText('57.3 KB').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('56 KiB').length).toBeGreaterThan(0);
+  });
+
+  it('shows the fetching status, then the gated error with a preset fallback (401)', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        await gate;
+        return jsonResponse({ error: 'gated' }, 401);
+      }),
+    );
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByLabelText('Hugging Face repo id');
+    await user.clear(input);
+    await user.type(input, 'meta-llama/Llama-3.1-8B-Instruct');
+    await user.click(screen.getByRole('button', { name: 'Fetch' }));
+
+    const panel = screen.getByRole('region', { name: 'Model' });
+    expect(within(panel).getByText(/Fetching meta-llama\/Llama-3\.1-8B-Instruct/)).toBeInTheDocument();
+
+    await act(async () => {
+      release();
+    });
+    expect(await within(panel).findByText(/gated or private/)).toBeInTheDocument();
+    // The calculator keeps its last good spec.
+    expect(screen.getAllByText('328 KB').length).toBeGreaterThan(0);
+
+    await user.click(within(panel).getByRole('button', { name: /Use the built-in Llama 3.1 8B preset/ }));
+    expect(screen.getAllByText('131 KB').length).toBeGreaterThan(0);
+  });
+});

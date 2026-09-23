@@ -139,7 +139,7 @@ All sizes in bytes; UI formats with 1000-based GB (labelled) to match vendor VRA
 2. `model_type` in `{deepseek_v2, deepseek_v3, kimi_k2}` or `kv_lora_rank` present → `attention: 'mla'`.
 3. MoE if any of `num_local_experts`, `n_routed_experts`, `num_experts` > 1; `expertsPerToken = num_experts_per_tok ?? 1`; `sharedExperts = n_shared_experts ?? 0`.
 4. `params` from the API's `safetensors.total`; if missing (no safetensors, e.g. pickle-only or GGUF repo) → `warnings` gets "parameter count not available — enter manually" and the field is left editable.
-5. 401/403 → "gated or private: add an HF token, or pick the built-in preset"; 404 → "repo not found"; network failure → plain message. Never throws to the UI: returns `{ ok: false, error }`.
+5. 401/403 → "gated, private, or misspelled: check the id, add an HF token, or pick the built-in preset" (verified: the Hub returns 401 for non-existent repos too); 404 → "repo not found"; network failure → plain message. Never throws to the UI: returns `{ ok: false, error }`.
 6. `warnings` collects: sliding-window present, MLA, MoE active-params estimate, fp8 native weights (quant table starts at fp8), `params` missing.
 
 ## UI
@@ -170,7 +170,7 @@ Everything recomputes synchronously on any input change; no submit button except
 
 ## Testing
 
-- `lib/` ≥ 90% covered by Vitest: the Llama 3 70B worked example is a golden test (320 KB/token, 640 MB @ 2K, 2.5 GB @ 8K, 10 GB @ 32K, 40 GB @ 128K, 140 GB weights BF16, 400 GB for 10 users @ 128K). Plus GQA vs MHA, MLA (DeepSeek-V3 config fixture), sliding window (Gemma 3 fixture with `sliding_window_pattern`, gpt-oss with `layer_types`), MoE active-params, quant table, fit/maxUsers/maxContext boundaries, URL round-trip, `parseConfig` on real config.json fixtures saved under `src/lib/__fixtures__/`.
+- `lib/` ≥ 90% covered by Vitest: the Llama 3 70B worked example is a golden test. The slide's figures are binary: 327,680 B/token = 320 KiB (328 KB decimal), 640 MiB @ 2K, 2.5 GiB @ 8K, 10 GiB @ 32K, 40 GiB @ 128K (42.9 GB), 400 GiB for 10 users @ 128K; weights 70.6 B × 2 = 141 GB. Tests assert exact bytes plus both unit strings. Plus GQA vs MHA, MLA (DeepSeek-V3 config fixture), sliding window (Gemma 3 fixture with `sliding_window_pattern`, gpt-oss with `layer_types`), MoE active-params, quant table, fit/maxUsers/maxContext boundaries, URL round-trip, `parseConfig` on real config.json fixtures saved under `src/lib/__fixtures__/`.
 - `hf.ts` tested with a mocked `fetch` for 200 / 401 / 404 / network error.
 - UI: one smoke test that App renders and the golden numbers appear for the Llama 3.3 70B preset.
 - `npm run build` and `npm run lint` clean.

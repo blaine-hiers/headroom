@@ -32,6 +32,9 @@ jobs:
           path: dist
 
   deploy:
+    # GitHub Pages is only available on public repos for this plan; the build
+    # job still runs as CI while the repo is private.
+    if: github.event.repository.private == false
     needs: build
     runs-on: ubuntu-latest
     environment:
