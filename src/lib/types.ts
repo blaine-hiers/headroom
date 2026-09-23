@@ -1,0 +1,105 @@
+// Contract shared by lib/ and ui/. Keep framework-free.
+
+export type Attention = 'mha_gqa' | 'mla';
+
+export type NativeDtype = 'bf16' | 'fp16' | 'fp32' | 'fp8';
+
+export interface MoeSpec {
+  numExperts: number;
+  expertsPerToken: number;
+  sharedExperts: number;
+}
+
+export interface ModelSpec {
+  id: string;
+  name: string;
+  /** Total parameters (safetensors total). */
+  params: number;
+  /** Parameters touched per token: = params for dense, estimate for MoE. */
+  activeParams: number;
+  numLayers: number;
+  attention: Attention;
+  /** GQA/MHA fields */
+  numKvHeads: number;
+  headDim: number;
+  /** MLA fields */
+  kvLoraRank?: number;
+  qkRopeHeadDim?: number;
+  /** Sliding-window attention */
+  slidingWindow?: number;
+  /** How many of numLayers use the sliding window (0 = none). */
+  slidingLayers?: number;
+  maxPositionEmbeddings: number;
+  hiddenSize: number;
+  vocabSize: number;
+  nativeDtype: NativeDtype;
+  moe?: MoeSpec;
+  source: 'hf' | 'preset' | 'manual';
+  warnings: string[];
+}
+
+export type WeightQuantKey =
+  | 'fp32'
+  | 'bf16'
+  | 'fp16'
+  | 'fp8'
+  | 'q8_0'
+  | 'q6_k'
+  | 'q5_k_m'
+  | 'q4_k_m'
+  | 'q4_0'
+  | 'awq_gptq_4bit'
+  | 'iq4_xs'
+  | 'nf4'
+  | 'q3_k_m'
+  | 'q2_k';
+
+export type KvQuantKey = 'fp16' | 'bf16' | 'fp8' | 'int8' | 'int4';
+
+export interface Quant {
+  weight: WeightQuantKey;
+  kv: KvQuantKey;
+}
+
+export interface HardwareSpec {
+  gpuName: string;
+  gpuCount: number;
+  /** Per GPU, vendor-style decimal GB. */
+  vramGB: number;
+  /** Per GPU, GB/s. */
+  bandwidthGBs: number;
+  /** Percent of VRAM kept free (default 5). */
+  reservePct: number;
+  /** Runtime/CUDA-context overhead per GPU in GB (default 1). */
+  overheadGB: number;
+}
+
+export interface Workload {
+  contextTokens: number;
+  concurrentUsers: number;
+}
+
+export interface CalcState {
+  model: ModelSpec;
+  quant: Quant;
+  hardware: HardwareSpec;
+  workload: Workload;
+}
+
+/** Everything the results column needs; all sizes in bytes. */
+export interface CalcResult {
+  kvBytesPerToken: number; // full-attention rate (no sliding cap)
+  kvBytesPerRequest: number; // at workload.contextTokens, sliding-window aware
+  kvBytesAllUsers: number;
+  weightBytes: number;
+  overheadBytes: number;
+  usableBytes: number;
+  totalBytes: number;
+  headroomBytes: number; // usable - total (negative when it does not fit)
+  fits: boolean;
+  maxUsersAtContext: number;
+  maxContextForUsers: number;
+  /** rows for 2K / 8K / 32K / 128K plus the chosen context if different */
+  contextTable: Array<{ contextTokens: number; kvBytesPerRequest: number; maxUsers: number }>;
+  throughput: { perUserTokS: number; aggregateTokS: number; efficiency: number };
+}
