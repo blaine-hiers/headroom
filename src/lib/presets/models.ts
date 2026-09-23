@@ -1,24 +1,21 @@
-import type { ModelSpec, MoeSpec } from '../types';
-import { activeParams } from '../weights';
+import { deriveWarnings, VISION_WARNING } from '../hf';
+import type { ModelSpec } from '../types';
+import { activeParamsDetailed } from '../weights';
 
 // Values checked 2026-09-23 against each repo's config.json and the Hub API's
 // safetensors.total (gated Llama/Gemma: API param count + published config values).
+// `warnings` holds only config-only notes; the spec-derived ones come from deriveWarnings().
 
 type PresetInput = Omit<ModelSpec, 'activeParams' | 'source' | 'warnings'> & { warnings?: string[] };
 
 function preset(p: PresetInput): ModelSpec {
-  const moe: MoeSpec | undefined = p.moe;
-  return {
-    slidingLayers: 0,
-    ...p,
-    activeParams: activeParams(p.params, moe),
-    source: 'preset',
-    warnings: p.warnings ?? [],
-  };
+  const spec: ModelSpec = { slidingLayers: 0, ...p, activeParams: 0, source: 'preset', warnings: [] };
+  spec.activeParams = activeParamsDetailed(spec).active;
+  spec.warnings = [...deriveWarnings(spec), ...(p.warnings ?? [])];
+  return spec;
 }
 
-const MOE_NOTE =
-  'MoE: all experts must be resident; active params are an estimate that slightly understates (attention and embeddings are always active)';
+const MXFP4_NOTE = 'weights ship as MXFP4 (~4.25 bits/weight for the experts); pick a 4-bit weight quant to match the download size';
 
 export const MODEL_PRESETS: ModelSpec[] = [
   preset({
@@ -33,6 +30,7 @@ export const MODEL_PRESETS: ModelSpec[] = [
     hiddenSize: 4096,
     vocabSize: 128256,
     nativeDtype: 'bf16',
+    ffn: { intermediateSize: 14336, numAttentionHeads: 32, tieEmbeddings: false },
   }),
   preset({
     id: 'meta-llama/Llama-3.3-70B-Instruct',
@@ -46,6 +44,7 @@ export const MODEL_PRESETS: ModelSpec[] = [
     hiddenSize: 8192,
     vocabSize: 128256,
     nativeDtype: 'bf16',
+    ffn: { intermediateSize: 28672, numAttentionHeads: 64, tieEmbeddings: false },
   }),
   preset({
     id: 'meta-llama/Llama-3.1-405B-Instruct',
@@ -59,6 +58,7 @@ export const MODEL_PRESETS: ModelSpec[] = [
     hiddenSize: 16384,
     vocabSize: 128256,
     nativeDtype: 'bf16',
+    ffn: { intermediateSize: 53248, numAttentionHeads: 128, tieEmbeddings: false },
   }),
   preset({
     id: 'Qwen/Qwen3-32B',
@@ -72,6 +72,7 @@ export const MODEL_PRESETS: ModelSpec[] = [
     hiddenSize: 5120,
     vocabSize: 151936,
     nativeDtype: 'bf16',
+    ffn: { intermediateSize: 25600, numAttentionHeads: 64, tieEmbeddings: false },
   }),
   preset({
     id: 'Qwen/Qwen3-30B-A3B',
@@ -85,8 +86,8 @@ export const MODEL_PRESETS: ModelSpec[] = [
     hiddenSize: 2048,
     vocabSize: 151936,
     nativeDtype: 'bf16',
+    ffn: { intermediateSize: 6144, moeIntermediateSize: 768, numAttentionHeads: 32, tieEmbeddings: false },
     moe: { numExperts: 128, expertsPerToken: 8, sharedExperts: 0 },
-    warnings: [MOE_NOTE],
   }),
   preset({
     id: 'google/gemma-3-27b-it',
@@ -102,10 +103,8 @@ export const MODEL_PRESETS: ModelSpec[] = [
     hiddenSize: 5376,
     vocabSize: 262208,
     nativeDtype: 'bf16',
-    warnings: [
-      'sliding-window attention on 51 of 62 layers (window 1024 tokens): KV for those layers stops growing past the window; some runtimes ignore this and allocate full-context KV',
-      'param count includes the ~0.4B SigLIP vision tower',
-    ],
+    ffn: { intermediateSize: 21504, numAttentionHeads: 32, tieEmbeddings: true },
+    warnings: ['parameter count includes the ~0.4B SigLIP vision tower'],
   }),
   preset({
     id: 'openai/gpt-oss-120b',
@@ -121,12 +120,9 @@ export const MODEL_PRESETS: ModelSpec[] = [
     hiddenSize: 2880,
     vocabSize: 201088,
     nativeDtype: 'bf16',
+    ffn: { intermediateSize: 2880, numAttentionHeads: 64, tieEmbeddings: false },
     moe: { numExperts: 128, expertsPerToken: 4, sharedExperts: 0 },
-    warnings: [
-      'sliding-window attention on 18 of 36 layers (window 128 tokens): KV for those layers stops growing past the window; some runtimes ignore this and allocate full-context KV',
-      MOE_NOTE,
-      'weights ship as MXFP4 (~4.25 bits/weight for the experts); pick a 4-bit weight quant to match the download size',
-    ],
+    warnings: [MXFP4_NOTE],
   }),
   preset({
     id: 'openai/gpt-oss-20b',
@@ -142,12 +138,9 @@ export const MODEL_PRESETS: ModelSpec[] = [
     hiddenSize: 2880,
     vocabSize: 201088,
     nativeDtype: 'bf16',
+    ffn: { intermediateSize: 2880, numAttentionHeads: 64, tieEmbeddings: false },
     moe: { numExperts: 32, expertsPerToken: 4, sharedExperts: 0 },
-    warnings: [
-      'sliding-window attention on 12 of 24 layers (window 128 tokens): KV for those layers stops growing past the window; some runtimes ignore this and allocate full-context KV',
-      MOE_NOTE,
-      'weights ship as MXFP4 (~4.25 bits/weight for the experts); pick a 4-bit weight quant to match the download size',
-    ],
+    warnings: [MXFP4_NOTE],
   }),
   preset({
     id: 'deepseek-ai/DeepSeek-V3.1',
@@ -163,12 +156,16 @@ export const MODEL_PRESETS: ModelSpec[] = [
     hiddenSize: 7168,
     vocabSize: 129280,
     nativeDtype: 'fp8',
+    ffn: {
+      intermediateSize: 18432,
+      moeIntermediateSize: 2048,
+      firstKDense: 3,
+      numAttentionHeads: 128,
+      tieEmbeddings: false,
+      qLoraRank: 1536,
+      vHeadDim: 128,
+    },
     moe: { numExperts: 256, expertsPerToken: 8, sharedExperts: 1 },
-    warnings: [
-      'MLA: KV cache is a single compressed latent per token (kv_lora_rank + qk_rope_head_dim), no separate K and V',
-      MOE_NOTE,
-      'native weights are FP8; the quant table starts at fp8 for this model',
-    ],
   }),
   preset({
     id: 'mistralai/Mistral-Small-3.2-24B-Instruct-2506',
@@ -182,6 +179,8 @@ export const MODEL_PRESETS: ModelSpec[] = [
     hiddenSize: 5120,
     vocabSize: 131072,
     nativeDtype: 'bf16',
+    ffn: { intermediateSize: 32768, numAttentionHeads: 32, tieEmbeddings: false },
+    warnings: [VISION_WARNING],
   }),
 ];
 

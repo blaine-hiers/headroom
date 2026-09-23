@@ -598,6 +598,14 @@ tr.chosen td {
   background: var(--chosen-bg);
 }
 
+tr.over-max td {
+  color: var(--muted);
+}
+
+tr.over-max .tag {
+  color: var(--muted);
+}
+
 .tag {
   margin-left: 8px;
   font-family: var(--font);

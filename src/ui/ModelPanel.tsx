@@ -1,5 +1,5 @@
 import { useId, useRef, useState } from 'react';
-import { fetchModel, findModelPreset, MODEL_PRESETS } from '../lib';
+import { activeParamsDetailed, fetchModel, findModelPreset, MODEL_PRESETS } from '../lib';
 import type { Attention, ModelSpec, MoeSpec, NativeDtype } from '../lib';
 import { NumberField } from './NumberField';
 import { readStorage, TOKEN_KEY, writeStorage } from './storage';
@@ -242,7 +242,7 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
         )}
         <p className="help">
           Active params: <span className="num">{(model.activeParams / 1e9).toFixed(2)} B</span>
-          {moe ? ' (MoE estimate)' : ' (dense)'}. Any edit marks the model as manual.
+          {` (${activeParamsDetailed(model).method})`}. Any edit marks the model as manual.
         </p>
       </details>
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { kvBytesForContext, kvBytesPerToken } from '../kvcache';
-import { activeParams } from '../weights';
+import { deriveWarnings } from '../hf';
+import { activeParamsDetailed } from '../weights';
 import { CUSTOM_GPU_NAME, GPU_PRESETS, findGpuPreset } from './gpus';
 import { MODEL_PRESETS, findModelPreset } from './models';
 
@@ -36,7 +37,9 @@ describe('model presets', () => {
     for (const m of MODEL_PRESETS) {
       expect(m.source).toBe('preset');
       expect(m.id).toMatch(/^[\w.-]+\/[\w.-]+$/);
-      expect(m.activeParams).toBe(activeParams(m.params, m.moe));
+      expect(m.activeParams).toBe(activeParamsDetailed(m).active);
+      expect(m.ffn, m.name).toBeDefined();
+      expect(m.warnings.slice(0, deriveWarnings(m).length)).toEqual(deriveWarnings(m));
       expect(Number.isFinite(kvBytesPerToken(m, 'fp16'))).toBe(true);
       expect(kvBytesPerToken(m, 'fp16')).toBeGreaterThan(0);
     }

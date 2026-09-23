@@ -1,5 +1,5 @@
 import { formatNumber, formatTokens, KV_QUANTS, WEIGHT_QUANTS } from '../lib';
-import type { CalcResult, CalcState } from '../lib';
+import type { ActiveParamsMethod, CalcResult, CalcState } from '../lib';
 import { Bytes } from './Bytes';
 import { Chart } from './Chart';
 import { ShowTheMath } from './ShowTheMath';
@@ -12,11 +12,20 @@ interface Props {
 
 const BADGE_TEXT = { fits: 'Fits', tight: 'Tight', nofit: 'Does not fit' } as const;
 
+const METHOD_LABEL: Record<ActiveParamsMethod, string> = {
+  dense: 'dense, all params',
+  structural: 'MoE, structural estimate',
+  ratio: 'MoE, ratio estimate',
+};
+
+/** 3.04e9 → "3.04B". */
+const billions = (n: number) => `${formatNumber(n / 1e9, 2)}B`;
+
 const users = (n: number) => (Number.isFinite(n) ? formatNumber(n) : '∞');
 const tokS = (v: number) => (v > 0 && Number.isFinite(v) ? formatNumber(v, v < 10 ? 1 : 0) : '—');
 
 export function Results({ state, result }: Props) {
-  const { workload, quant, hardware } = state;
+  const { workload, quant, hardware, model } = state;
   const N = workload.concurrentUsers;
   const C = workload.contextTokens;
   const level = fitLevel(result.fits, result.headroomBytes, result.usableBytes);
@@ -59,6 +68,9 @@ export function Results({ state, result }: Props) {
           <Bytes value={result.weightBytes} stacked />
           <p className="muted">
             {WEIGHT_QUANTS[quant.weight].label}, {WEIGHT_QUANTS[quant.weight].bitsPerWeight} bits/weight
+          </p>
+          <p className="muted active-params">
+            {billions(result.activeParams)} active per token ({METHOD_LABEL[result.activeParamsMethod]})
           </p>
         </div>
         <div className="card stat">
@@ -110,11 +122,15 @@ export function Results({ state, result }: Props) {
             <tbody>
               {result.contextTable.map((row) => {
                 const chosen = row.contextTokens === Math.floor(C);
+                // Past the model's max position: still shown so the 128K comparison stays visible.
+                const overMax = row.contextTokens > model.maxPositionEmbeddings;
+                const cls = [chosen && 'chosen', overMax && 'over-max'].filter(Boolean).join(' ');
                 return (
-                  <tr key={row.contextTokens} className={chosen ? 'chosen' : undefined} aria-current={chosen ? 'true' : undefined}>
+                  <tr key={row.contextTokens} className={cls || undefined} aria-current={chosen ? 'true' : undefined}>
                     <td className="num">
                       {formatTokens(row.contextTokens)}
                       {chosen && <span className="tag">chosen</span>}
+                      {overMax && <span className="tag">&gt; model max</span>}
                     </td>
                     <td>
                       <Bytes value={row.kvBytesPerRequest} />

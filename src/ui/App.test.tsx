@@ -190,6 +190,26 @@ describe('App', () => {
     const slider = screen.getByRole('slider');
     expect(slider).toHaveValue(slider.getAttribute('max'));
   });
+  it('context-table rows above the model max are greyed and tagged, but still shown', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Qwen3-32B' })); // max 40960
+    const rows = screen.getAllByRole('row').filter((r) => r.classList.contains('over-max'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent('128K');
+    expect(rows[0]).toHaveTextContent('> model max');
+    const row32k = screen.getAllByRole('row').find((r) => r.textContent?.startsWith('32K'));
+    expect(row32k).not.toHaveClass('over-max');
+  });
+
+  it('the Weights card shows active params and how they were estimated', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    expect(screen.getByText(/70\.55B active per token \(dense, all params\)/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Qwen3-30B-A3B' }));
+    expect(screen.getByText(/3\.04B active per token \(MoE, structural estimate\)/)).toBeInTheDocument();
+  });
+
   it('tabbing through the Advanced fields leaves a preset untouched', async () => {
     const user = userEvent.setup();
     render(<App />);

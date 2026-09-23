@@ -1,5 +1,5 @@
-import type { Attention, ModelSpec, MoeSpec, NativeDtype } from './types';
-import { activeParams } from './weights';
+import type { Attention, FfnSpec, ModelSpec, MoeSpec, NativeDtype } from './types';
+import { activeParamsDetailed } from './weights';
 
 type Json = Record<string, unknown>;
 
@@ -41,6 +41,62 @@ function dtypeFrom(v: unknown): NativeDtype | undefined {
     default:
       return undefined;
   }
+}
+
+const HEAD_DIM_MISSING = 'head dimension could not be derived — enter it manually';
+const PARAMS_MISSING = 'parameter count not available — enter manually';
+export const FP8_WARNING = 'native FP8 weights: FP8 pre-selected; BF16 would double the weight size';
+export const VISION_WARNING = 'parameter count includes a vision tower';
+
+const fmtB = (n: number): string => `${Number((n / 1e9).toFixed(2))}B`;
+
+/**
+ * Warnings that follow from the spec alone, in a stable order. Regenerated after every
+ * Advanced edit so a stale note (MoE turned off, sliding window cleared) disappears.
+ */
+export function deriveWarnings(spec: ModelSpec): string[] {
+  const warnings: string[] = [];
+  if (!(spec.headDim > 0)) warnings.push(HEAD_DIM_MISSING);
+  const sliding = spec.slidingLayers ?? 0;
+  const window = spec.slidingWindow ?? 0;
+  if (sliding > 0 && window > 0) {
+    warnings.push(
+      `sliding-window attention on ${sliding} of ${spec.numLayers} layers (window ${window} tokens): KV for those layers stops growing past the window; some runtimes ignore this and allocate full-context KV`,
+    );
+  }
+  if (spec.attention === 'mla') {
+    warnings.push('MLA: KV cache is a single compressed latent per token (kv_lora_rank + qk_rope_head_dim), no separate K and V');
+  }
+  const moe = spec.moe;
+  if (moe && moe.numExperts > 1) {
+    const { active, method } = activeParamsDetailed(spec);
+    const head = `MoE (${moe.numExperts} experts, ${moe.expertsPerToken} per token${moe.sharedExperts ? `, ${moe.sharedExperts} shared` : ''}): all experts must be resident`;
+    warnings.push(
+      method === 'structural'
+        ? `${head}; ~${fmtB(active)} active per token, a structural estimate from the layer shapes (attention, active experts, LM head)`
+        : `${head}; ~${fmtB(active)} active per token from the params × experts ratio, which can understate by a third (attention and embeddings are always active)`,
+    );
+  }
+  if (spec.nativeDtype === 'fp8') warnings.push(FP8_WARNING);
+  if (!(spec.params > 0)) warnings.push(PARAMS_MISSING);
+  return warnings;
+}
+
+// Prefixes of every deriveWarnings() message (including older wordings in shared links).
+const DERIVED_PREFIXES = [
+  'head dimension could not be derived',
+  'sliding-window attention on ',
+  'MLA: ',
+  'MoE',
+  'native FP8 weights',
+  'native weights are FP8',
+  'parameter count not available',
+];
+
+/** Keep config-only notes (vision tower, pre-quantized weights, ...) and regenerate the rest. */
+export function refreshWarnings(spec: ModelSpec): string[] {
+  const kept = spec.warnings.filter((w) => !DERIVED_PREFIXES.some((p) => w.startsWith(p)));
+  return [...deriveWarnings(spec), ...kept];
 }
 
 /** Strip whitespace, a leading https://huggingface.co/, and trailing slashes. */
@@ -87,10 +143,7 @@ export function parseConfig(json: unknown, params: number | undefined, id: strin
     if (nope !== undefined && qkRopeHeadDim !== undefined) headDim = nope + qkRopeHeadDim;
   }
   if (headDim === undefined && hiddenSize && numHeads) headDim = hiddenSize / numHeads;
-  if (headDim === undefined) {
-    headDim = 0;
-    warnings.push('head dimension could not be derived — enter it manually');
-  }
+  if (headDim === undefined) headDim = 0;
 
   // MoE
   const numExperts = getNum('num_local_experts') ?? getNum('n_routed_experts') ?? getNum('num_experts');
@@ -133,38 +186,36 @@ export function parseConfig(json: unknown, params: number | undefined, id: strin
 
   const totalParams = params !== undefined && Number.isFinite(params) && params > 0 ? params : 0;
 
-  // Warnings, in a stable order.
-  if (hasSliding) {
-    warnings.push(
-      `sliding-window attention on ${slidingLayers} of ${numLayers} layers (window ${window} tokens): KV for those layers stops growing past the window; some runtimes ignore this and allocate full-context KV`,
-    );
+  // Layer shapes for the structural active-params estimate.
+  const intermediate = getNum('intermediate_size') ?? getNum('n_inner') ?? getNum('ffn_dim');
+  let ffn: FfnSpec | undefined;
+  if (intermediate !== undefined && numHeads !== undefined) {
+    ffn = { intermediateSize: intermediate, numAttentionHeads: numHeads, tieEmbeddings: get('tie_word_embeddings') === true };
+    const moeIntermediate = getNum('moe_intermediate_size');
+    const firstKDense = getNum('first_k_dense_replace');
+    const qLoraRank = getNum('q_lora_rank');
+    const vHeadDim = getNum('v_head_dim');
+    if (moeIntermediate !== undefined) ffn.moeIntermediateSize = moeIntermediate;
+    if (firstKDense !== undefined) ffn.firstKDense = firstKDense;
+    if (qLoraRank !== undefined) ffn.qLoraRank = qLoraRank;
+    if (vHeadDim !== undefined) ffn.vHeadDim = vHeadDim;
   }
-  if (attention === 'mla') {
-    warnings.push('MLA: KV cache is a single compressed latent per token (kv_lora_rank + qk_rope_head_dim), no separate K and V');
-  }
-  if (moe) {
-    warnings.push(
-      `MoE (${moe.numExperts} experts, ${moe.expertsPerToken} per token${moe.sharedExperts ? `, ${moe.sharedExperts} shared` : ''}): all experts must be resident; active params are an estimate that slightly understates (attention and embeddings are always active)`,
-    );
-  }
-  if (nativeDtype === 'fp8') {
-    warnings.push('native weights are FP8; the quant table starts at fp8 for this model');
+
+  // Config-only notes (the spec-derived ones come from deriveWarnings below).
+  if (isObject(top.vision_config) || (isObject(top.text_config) && topModelType !== '' && !topModelType.includes('text'))) {
+    warnings.push(VISION_WARNING);
   }
   if (quantMethod === 'mxfp4') {
     warnings.push('weights ship as MXFP4 (~4.25 bits/weight for the experts); pick a 4-bit weight quant to match the download size');
   } else if (quantMethod && quantMethod !== 'fp8') {
     warnings.push(`repo ships pre-quantized weights (${quantMethod}); pick the matching weight quant`);
   }
-  if (totalParams === 0) {
-    warnings.push('parameter count not available — enter manually');
-  }
-
   const name = id.split('/').pop() || id;
   const spec: ModelSpec = {
     id,
     name,
     params: totalParams,
-    activeParams: activeParams(totalParams, moe),
+    activeParams: 0,
     numLayers,
     attention,
     numKvHeads,
@@ -183,6 +234,9 @@ export function parseConfig(json: unknown, params: number | undefined, id: strin
   }
   if (hasSliding) spec.slidingWindow = window;
   if (moe) spec.moe = moe;
+  if (ffn) spec.ffn = ffn;
+  spec.activeParams = activeParamsDetailed(spec).active;
+  spec.warnings = [...deriveWarnings(spec), ...warnings];
   return spec;
 }
 

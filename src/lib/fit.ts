@@ -1,7 +1,7 @@
 import { kvBytesForContext, kvBytesPerToken } from './kvcache';
 import { decodeThroughput } from './throughput';
 import type { CalcResult, CalcState, HardwareSpec } from './types';
-import { activeParams, weightBytes } from './weights';
+import { activeParamsDetailed, weightBytes } from './weights';
 
 export const TABLE_CONTEXTS = [2048, 8192, 32768, 131072] as const;
 
@@ -64,8 +64,9 @@ export function calculate(state: CalcState): CalcResult {
       return { contextTokens: c, kvBytesPerRequest: kvReq, maxUsers: maxUsers(usable, fixed, kvReq) };
     });
 
-  // Active params are derived from params + moe so a manual edit to params stays consistent.
-  const activeWeightBytes = weightBytes(activeParams(model.params, model.moe), quant.weight);
+  // Recomputed from the spec (not model.activeParams) so a manual edit stays consistent.
+  const active = activeParamsDetailed(model);
+  const activeWeightBytes = weightBytes(active.active, quant.weight);
   const throughput = decodeThroughput({
     activeWeightBytes,
     kvBytesPerRequest: perRequest,
@@ -79,6 +80,8 @@ export function calculate(state: CalcState): CalcResult {
     kvBytesPerRequest: perRequest,
     kvBytesAllUsers: allUsers,
     weightBytes: weights,
+    activeParams: active.active,
+    activeParamsMethod: active.method,
     overheadBytes: overhead,
     usableBytes: usable,
     totalBytes: total,

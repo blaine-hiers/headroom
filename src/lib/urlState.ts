@@ -2,6 +2,7 @@ import { KV_QUANTS, WEIGHT_QUANTS } from './quant';
 import type {
   Attention,
   CalcState,
+  FfnSpec,
   KvQuantKey,
   ModelSpec,
   NativeDtype,
@@ -27,6 +28,7 @@ const K = {
   vocabSize: 'vs',
   nativeDtype: 'dt',
   moe: 'moe',
+  ffn: 'ff',
   source: 'src',
   warnings: 'w',
   weightQuant: 'wq',
@@ -68,6 +70,7 @@ export function encodeState(state: CalcState): string {
   set(K.vocabSize, m.vocabSize);
   set(K.nativeDtype, m.nativeDtype);
   if (m.moe) set(K.moe, `${m.moe.numExperts},${m.moe.expertsPerToken},${m.moe.sharedExperts}`);
+  if (m.ffn) set(K.ffn, encodeFfn(m.ffn));
   set(K.source, m.source);
   for (const w of m.warnings) q.append(K.warnings, w);
   set(K.weightQuant, state.quant.weight);
@@ -85,6 +88,34 @@ export function encodeState(state: CalcState): string {
 }
 
 class BadState extends Error {}
+
+// ff=intermediate,heads,tie(0|1),moeIntermediate,firstKDense,qLoraRank,vHeadDim (optional ones may be empty)
+function encodeFfn(f: FfnSpec): string {
+  const o = (v: number | undefined) => (v === undefined ? '' : String(v));
+  return [f.intermediateSize, f.numAttentionHeads, f.tieEmbeddings ? 1 : 0, o(f.moeIntermediateSize), o(f.firstKDense), o(f.qLoraRank), o(f.vHeadDim)].join(',');
+}
+
+function decodeFfn(raw: string): FfnSpec {
+  const parts = raw.split(',').map((s) => s.trim());
+  if (parts.length !== 7) throw new BadState();
+  const req = (s: string): number => {
+    const n = s === '' ? NaN : Number(s);
+    if (!Number.isFinite(n)) throw new BadState();
+    return n;
+  };
+  const opt = (s: string): number | undefined => (s === '' ? undefined : req(s));
+  if (parts[2] !== '0' && parts[2] !== '1') throw new BadState();
+  const f: FfnSpec = { intermediateSize: req(parts[0]), numAttentionHeads: req(parts[1]), tieEmbeddings: parts[2] === '1' };
+  const moeIntermediateSize = opt(parts[3]);
+  const firstKDense = opt(parts[4]);
+  const qLoraRank = opt(parts[5]);
+  const vHeadDim = opt(parts[6]);
+  if (moeIntermediateSize !== undefined) f.moeIntermediateSize = moeIntermediateSize;
+  if (firstKDense !== undefined) f.firstKDense = firstKDense;
+  if (qLoraRank !== undefined) f.qLoraRank = qLoraRank;
+  if (vHeadDim !== undefined) f.vHeadDim = vHeadDim;
+  return f;
+}
 
 function oneOf<T extends string>(v: string | null, allowed: readonly T[]): T {
   if (v === null || !(allowed as readonly string[]).includes(v)) throw new BadState();
@@ -144,6 +175,8 @@ export function decodeState(qs: string, fallback: CalcState): CalcState {
       if (parts.length !== 3 || !parts.every(Number.isFinite)) throw new BadState();
       model.moe = { numExperts: parts[0], expertsPerToken: parts[1], sharedExperts: parts[2] };
     }
+    const ffnRaw = q.get(K.ffn);
+    if (ffnRaw !== null) model.ffn = decodeFfn(ffnRaw);
 
     return {
       model,

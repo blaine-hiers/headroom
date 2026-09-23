@@ -2,12 +2,34 @@
 
 export type Attention = 'mha_gqa' | 'mla';
 
+/** How active params were reached: all params, layer shapes, or the MoE params ratio. */
+export type ActiveParamsMethod = 'structural' | 'ratio' | 'dense';
+
 export type NativeDtype = 'bf16' | 'fp16' | 'fp32' | 'fp8';
 
 export interface MoeSpec {
   numExperts: number;
   expertsPerToken: number;
   sharedExperts: number;
+}
+
+/**
+ * Layer shapes for the structural active-params estimate (optional: without them an MoE
+ * model falls back to the params ratio).
+ */
+export interface FfnSpec {
+  /** Dense FFN width (intermediate_size); for gpt-oss/Mixtral this is also the expert width. */
+  intermediateSize: number;
+  /** Expert FFN width (moe_intermediate_size), when it differs from intermediateSize. */
+  moeIntermediateSize?: number;
+  /** Leading dense layers before the MoE layers start (first_k_dense_replace). */
+  firstKDense?: number;
+  numAttentionHeads: number;
+  tieEmbeddings: boolean;
+  /** MLA only: q_lora_rank (absent = full-rank q projection). */
+  qLoraRank?: number;
+  /** MLA only: v_head_dim. */
+  vHeadDim?: number;
 }
 
 export interface ModelSpec {
@@ -34,6 +56,7 @@ export interface ModelSpec {
   vocabSize: number;
   nativeDtype: NativeDtype;
   moe?: MoeSpec;
+  ffn?: FfnSpec;
   source: 'hf' | 'preset' | 'manual';
   warnings: string[];
 }
@@ -92,6 +115,9 @@ export interface CalcResult {
   kvBytesPerRequest: number; // at workload.contextTokens, sliding-window aware
   kvBytesAllUsers: number;
   weightBytes: number;
+  /** Parameters read per decode step, and how the figure was estimated. */
+  activeParams: number;
+  activeParamsMethod: ActiveParamsMethod;
   overheadBytes: number;
   usableBytes: number;
   totalBytes: number;

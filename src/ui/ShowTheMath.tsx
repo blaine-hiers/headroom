@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import {
-  activeParams,
+  attentionParamsPerLayer,
   DECODE_EFFICIENCY,
   effectiveSlidingLayers,
   formatNumber,
@@ -9,7 +9,7 @@ import {
   WEIGHT_QUANTS,
   weightBytes,
 } from '../lib';
-import type { CalcResult, CalcState } from '../lib';
+import type { ActiveParamsMethod, CalcResult, CalcState } from '../lib';
 import { Bytes } from './Bytes';
 
 interface Props {
@@ -31,6 +31,37 @@ function Step({ title, formula, sub, result }: { title: string; formula: string;
   );
 }
 
+function ActiveParamsStep({ state, active, method }: { state: CalcState; active: number; method: ActiveParamsMethod }) {
+  const { model } = state;
+  const moe = model.moe;
+  const res = `${n(active)} (${method})`;
+  if (!moe || method === 'dense') {
+    return <Step title="Active params (dense)" formula="params" sub={n(model.params)} result={res} />;
+  }
+  if (method === 'ratio') {
+    return (
+      <Step
+        title="Active params (MoE, ratio: can understate by a third)"
+        formula="params × (perToken + shared) / (experts + shared)"
+        sub={`${n(model.params)} × (${moe.expertsPerToken} + ${moe.sharedExperts}) / (${moe.numExperts} + ${moe.sharedExperts})`}
+        result={res}
+      />
+    );
+  }
+  const ffn = model.ffn;
+  const h = model.hiddenSize;
+  const dense = Math.min(model.numLayers, ffn?.firstKDense ?? 0);
+  const expert = ffn?.moeIntermediateSize ?? ffn?.intermediateSize ?? 0;
+  return (
+    <Step
+      title="Active params (MoE, structural)"
+      formula="layers × attention + denseLayers × 3 × hidden × intermediate + moeLayers × (3 × hidden × expertFfn × (perToken + shared) + hidden × experts) + vocab × hidden"
+      sub={`${n(model.numLayers)} × ${n(attentionParamsPerLayer(model) ?? 0)} + ${n(dense)} × 3 × ${n(h)} × ${n(ffn?.intermediateSize ?? 0)} + ${n(model.numLayers - dense)} × (3 × ${n(h)} × ${n(expert)} × (${moe.expertsPerToken} + ${moe.sharedExperts}) + ${n(h)} × ${n(moe.numExperts)}) + ${n(model.vocabSize)} × ${n(h)}`}
+      result={res}
+    />
+  );
+}
+
 export function ShowTheMath({ state, result }: Props) {
   const { model, quant, hardware: hw, workload } = state;
   const kvB = KV_QUANTS[quant.kv].bytesPerElement;
@@ -41,7 +72,8 @@ export function ShowTheMath({ state, result }: Props) {
   const C = Math.floor(workload.contextTokens);
   const N = Math.floor(workload.concurrentUsers);
   const fixed = result.weightBytes + result.overheadBytes;
-  const active = activeParams(model.params, model.moe);
+  const active = result.activeParams;
+  const method = result.activeParamsMethod;
   const activeBytes = weightBytes(active, quant.weight);
   const B = (v: number) => <Bytes value={v} />;
   const maxU = result.maxUsersAtContext;
@@ -119,6 +151,7 @@ export function ShowTheMath({ state, result }: Props) {
           sub={`min(${n(model.maxPositionEmbeddings)}, floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)})))`}
           result={`${n(result.maxContextForUsers)} tokens`}
         />
+        <ActiveParamsStep state={state} active={active} method={method} />
         <Step
           title="Decode throughput"
           formula="bandwidthGBs × 1e9 × gpuCount × efficiency / (activeWeights + N × KV per request)"
@@ -130,12 +163,6 @@ export function ShowTheMath({ state, result }: Props) {
           result={`${n(result.throughput.perUserTokS, 1)} tok/s per user, ${n(result.throughput.aggregateTokS, 1)} tok/s aggregate`}
         />
       </ol>
-      {model.moe && (
-        <p className="help">
-          Active params (MoE) ≈ params × (perToken + shared) / (experts + shared) = {n(model.params)} × ({model.moe.expertsPerToken} +{' '}
-          {model.moe.sharedExperts}) / ({model.moe.numExperts} + {model.moe.sharedExperts}) = {n(active)}.
-        </p>
-      )}
     </details>
   );
 }

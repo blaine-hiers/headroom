@@ -7,7 +7,7 @@ import mistralRaw from './__fixtures__/mistral-7b-v0.1.json?raw';
 import qwenApiRaw from './__fixtures__/qwen2.5-7b-instruct.api.json?raw';
 import qwenRaw from './__fixtures__/qwen2.5-7b-instruct.json?raw';
 import qwenMoeRaw from './__fixtures__/qwen3-30b-a3b.json?raw';
-import { HF_ERRORS, fetchModel, normalizeModelId, parseConfig } from './hf';
+import { HF_ERRORS, deriveWarnings, fetchModel, normalizeModelId, parseConfig, refreshWarnings } from './hf';
 
 const j = (raw: string): unknown => JSON.parse(raw);
 
@@ -43,7 +43,9 @@ describe('parseConfig on real fixtures', () => {
     expect(s.hiddenSize).toBe(2048);
     expect(s.maxPositionEmbeddings).toBe(40960);
     expect(s.moe).toEqual({ numExperts: 128, expertsPerToken: 8, sharedExperts: 0 });
-    expect(s.activeParams).toBeCloseTo((30_532_122_624 * 8) / 128, 0);
+    expect(s.ffn).toEqual({ intermediateSize: 6144, moeIntermediateSize: 768, numAttentionHeads: 32, tieEmbeddings: false });
+    expect(s.activeParams / 1e9).toBeCloseTo(3.04, 2);
+    expect(s.warnings.some((w) => w.includes('structural estimate'))).toBe(true);
     expect(s.slidingLayers).toBe(0);
     expect(s.warnings.some((w) => w.startsWith('MoE'))).toBe(true);
   });
@@ -59,7 +61,8 @@ describe('parseConfig on real fixtures', () => {
     expect(s.nativeDtype).toBe('fp8');
     expect(s.maxPositionEmbeddings).toBe(163840);
     expect(s.warnings.some((w) => w.startsWith('MLA'))).toBe(true);
-    expect(s.warnings.some((w) => w.includes('FP8'))).toBe(true);
+    expect(s.warnings).toContain('native FP8 weights: FP8 pre-selected; BF16 would double the weight size');
+    expect(s.ffn).toMatchObject({ firstKDense: 3, qLoraRank: 1536, vHeadDim: 128, moeIntermediateSize: 2048 });
   });
 
   it('gpt-oss-120b: layer_types sliding count, MoE via num_local_experts, MXFP4 warning', () => {
@@ -101,6 +104,30 @@ describe('parseConfig on real fixtures', () => {
       vocabSize: 262208,
       nativeDtype: 'bf16',
     });
+    expect(s.warnings).toContain('parameter count includes a vision tower');
+  });
+
+  it('text-only configs carry no vision-tower note', () => {
+    expect(parseConfig(j(llamaRaw), 70.6e9, 'a/b').warnings).not.toContain('parameter count includes a vision tower');
+    expect(parseConfig(j(qwenMoeRaw), 1, 'a/b').warnings).not.toContain('parameter count includes a vision tower');
+  });
+});
+
+describe('deriveWarnings / refreshWarnings', () => {
+  it('ratio fallback says it can understate by a third', () => {
+    const s = parseConfig(j(qwenMoeRaw), 30_532_122_624, 'Qwen/Qwen3-30B-A3B');
+    delete s.ffn;
+    expect(deriveWarnings(s).find((w) => w.startsWith('MoE'))).toContain('understate by a third');
+  });
+
+  it('turning MoE off or clearing the sliding window drops the stale note, keeps config-only notes', () => {
+    const s = parseConfig(j(gptOssRaw), 116_829_156_672, 'openai/gpt-oss-120b');
+    const edited = { ...s, slidingWindow: 0 };
+    delete edited.moe;
+    const w = refreshWarnings(edited);
+    expect(w.some((x) => x.startsWith('MoE'))).toBe(false);
+    expect(w.some((x) => x.startsWith('sliding-window'))).toBe(false);
+    expect(w.some((x) => x.includes('MXFP4'))).toBe(true);
   });
 });
 
