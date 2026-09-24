@@ -2,6 +2,7 @@ import { effectiveBitsPerWeight, formatNumber, formatSeconds, formatTokens, KV_Q
 import type { ActiveParamsMethod, CalcResult, CalcState, WeightQuantKey } from '../lib';
 import { Bytes } from './Bytes';
 import { Chart } from './Chart';
+import { ExportBar } from './ExportBar';
 import { FitMatrix } from './FitMatrix';
 import { LaunchCommand } from './LaunchCommand';
 import { CostCard } from './CostCard';
@@ -13,6 +14,8 @@ interface Props {
   state: CalcState;
   result: CalcResult;
   onApplyFit: (weight: WeightQuantKey, contextTokens: number) => void;
+  /** Writes the current state into the URL and returns the full shareable link. */
+  getLink: () => string;
 }
 
 const BADGE_TEXT: Record<FitLevel, string> = { fits: 'Fits', tight: 'Tight', nofit: 'Does not fit', offloaded: 'Offloaded' };
@@ -50,7 +53,7 @@ function tensorParallelWarnings(tp: CalcResult['tensorParallel'], numKvHeads: nu
   return msgs;
 }
 
-export function Results({ state, result, onApplyFit }: Props) {
+export function Results({ state, result, onApplyFit, getLink }: Props) {
   const { workload, quant, hardware, model } = state;
   const N = workload.concurrentUsers;
   const C = workload.contextTokens;
@@ -261,6 +264,7 @@ export function Results({ state, result, onApplyFit }: Props) {
       <Chart result={result} users={N} />
       <LaunchCommand state={state} />
       <ShowTheMath state={state} result={result} />
+      <ExportBar state={state} result={result} getLink={getLink} />
       <p className="caveat muted">Estimates, not benchmarks. Real runtimes add activation memory, fragmentation, and their own KV block rounding.</p>
     </div>
   );

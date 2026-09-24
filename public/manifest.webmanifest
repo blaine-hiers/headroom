@@ -1,0 +1,14 @@
+{
+  "name": "Headroom",
+  "short_name": "Headroom",
+  "description": "Will this LLM fit on my GPU? Weights, KV cache, max users and context, and decode-speed, from a Hugging Face repo id.",
+  "start_url": "/headroom/",
+  "scope": "/headroom/",
+  "display": "standalone",
+  "background_color": "#111418",
+  "theme_color": "#111418",
+  "icons": [
+    { "src": "/headroom/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/headroom/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

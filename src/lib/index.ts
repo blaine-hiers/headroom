@@ -21,5 +21,7 @@ export * from './runtime';
 export * from './launchCommand';
 export * from './hardwareFinder';
 export * from './compare';
+export * from './exportMarkdown';
+export * from './exportCsv';
 export * from './presets/gpus';
 export * from './presets/models';

@@ -143,7 +143,7 @@ export default function App() {
               onRemove={removeColumn}
             />
           )}
-          <Results state={activeState} result={activeResult} onApplyFit={applyFit} />
+          <Results state={activeState} result={activeResult} onApplyFit={applyFit} getLink={getLink} />
         </div>
       </main>
       <footer className="footer muted">
