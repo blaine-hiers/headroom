@@ -96,7 +96,14 @@ export function encodeState(state: CalcState): string {
   set(K.reservePct, h.reservePct);
   set(K.overheadGB, h.overheadGB);
   set(K.appleWiredLimitGB, h.appleWiredLimitGB);
-  set(K.usdPerHour, h.usdPerHour);
+  if (h.usdPerHour !== undefined) {
+    set(K.usdPerHour, h.usdPerHour);
+  } else if (findGpuPreset(h.gpuName)?.usdPerHour !== undefined) {
+    // Explicit "cleared" sentinel: this preset has a price but the price was blanked out.
+    // Without it, an absent key is indistinguishable from an old link that predates the
+    // feature, and decode would fall the price back in on reload/share.
+    q.set(K.usdPerHour, '');
+  }
   set(K.contextTokens, state.workload.contextTokens);
   set(K.concurrentUsers, state.workload.concurrentUsers);
   return q.toString();
@@ -221,10 +228,18 @@ export function decodeState(qs: string, fallback: CalcState): CalcState {
         };
         const appleWiredLimit = optNum(K.appleWiredLimitGB);
         if (appleWiredLimit !== undefined) (hw as any).appleWiredLimitGB = appleWiredLimit;
-        // New key (issue #16): a link shared before the cost card existed has no "up" param.
-        // Falling back to the named GPU's own preset price (when it has one) keeps an old H100
-        // link's cost card populated instead of hiding it for no reason.
-        const usdPerHour = optNum(K.usdPerHour) ?? findGpuPreset(str(K.gpuName))?.usdPerHour;
+        // New key (issue #16): a link shared before the cost card existed has no "up" param at
+        // all — falling back to the named GPU's own preset price (when it has one) keeps an old
+        // H100 link's cost card populated instead of hiding it for no reason. But a *present*,
+        // empty "up=" is a deliberate sentinel: the preset has a price and it was blanked out in
+        // the Hardware panel, which must stay blank on reload/share rather than fall back too.
+        const usdPerHourRaw = q.get(K.usdPerHour);
+        const usdPerHour =
+          usdPerHourRaw === null
+            ? findGpuPreset(str(K.gpuName))?.usdPerHour
+            : usdPerHourRaw.trim() === ''
+              ? undefined
+              : num(K.usdPerHour);
         if (usdPerHour !== undefined) (hw as any).usdPerHour = usdPerHour;
         return hw;
       })(),

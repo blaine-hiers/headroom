@@ -89,6 +89,17 @@ describe('reducer: hardware cloud cost', () => {
   });
 });
 
+describe('initialState: a cleared cloud cost price stays cleared', () => {
+  it('does not get clamped back up to the 0.01 minimum on reload', () => {
+    // H100 SXM has a preset price; usdPerHour: undefined here is a deliberate clear, which
+    // urlState.ts encodes as an explicit sentinel (not an absent key). initialState's clamp
+    // only touches a defined usdPerHour, so the cleared value must stay undefined, not 0.01.
+    const s = { ...defaultState, hardware: { ...defaultState.hardware, gpuName: 'H100 SXM', usdPerHour: undefined } };
+    const decoded = initialState(`?${encodeState(s)}`);
+    expect(decoded.hardware.usdPerHour).toBeUndefined();
+  });
+});
+
 describe('initialState from a URL', () => {
   it('clamps out-of-range model fields', () => {
     const model = {
