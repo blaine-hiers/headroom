@@ -257,6 +257,19 @@ describe('App', () => {
       expect(window.localStorage.getItem('headroom.hfToken')).toBeNull();
     });
 
+    it('an explicit unchecked preference does not load or keep a stale stored token', async () => {
+      // Simulates a token written back by another tab (still checked) or an older build
+      // after this tab unchecked Remember token.
+      window.localStorage.setItem('headroom.rememberToken', 'false');
+      window.localStorage.setItem('headroom.hfToken', 'hf_stale');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByText('Gated models'));
+      expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).not.toBeChecked();
+      expect(screen.getByLabelText('Hugging Face token')).toHaveValue('');
+      expect(window.localStorage.getItem('headroom.hfToken')).toBeNull();
+    });
+
     it('starts checked when a token is already stored from before the update', async () => {
       window.localStorage.setItem('headroom.hfToken', 'hf_test_fake');
       const user = userEvent.setup();

@@ -25,14 +25,22 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
   const tokenId = useId();
   const rememberId = useId();
   const [repoId, setRepoId] = useState(model.id);
-  const [token, setToken] = useState(() => readStorage(TOKEN_KEY) ?? '');
-  const [rememberToken, setRememberToken] = useState(() => {
+  // Resolve remember-vs-token together, once, so an explicit "don't remember" preference
+  // never leaves a stale token (written by another tab, or an older build) loaded into
+  // state or sitting in storage.
+  const [tokenInit] = useState(() => {
     const pref = readStorage(REMEMBER_TOKEN_KEY);
-    if (pref !== null) return pref === 'true';
     // No preference saved yet: an existing stored token means an existing user, who
     // should start checked so their saved token keeps working. New users default unchecked.
-    return readStorage(TOKEN_KEY) !== null;
+    const remember = pref !== null ? pref === 'true' : readStorage(TOKEN_KEY) !== null;
+    if (!remember) {
+      if (pref === 'false') writeStorage(TOKEN_KEY, null);
+      return { token: '', remember };
+    }
+    return { token: readStorage(TOKEN_KEY) ?? '', remember };
   });
+  const [token, setToken] = useState(tokenInit.token);
+  const [rememberToken, setRememberToken] = useState(tokenInit.remember);
   const [fetchState, setFetchState] = useState<FetchState>({ kind: 'idle' });
   const requestSeq = useRef(0);
 
