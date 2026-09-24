@@ -1,6 +1,6 @@
 import { useId } from 'react';
-import { GPU_PRESETS, findGpuPreset } from '../lib';
-import type { GpuVendor, HardwareSpec } from '../lib';
+import { GPU_PRESETS, RUNTIME_KEYS, RUNTIME_PROFILES, findGpuPreset } from '../lib';
+import type { GpuVendor, HardwareSpec, RuntimeKey } from '../lib';
 import { NumberField, Stepper } from './NumberField';
 import { MAX_GPUS } from './state';
 
@@ -14,14 +14,31 @@ const VENDORS: Array<{ vendor: GpuVendor; label: string }> = [
 
 interface Props {
   hardware: HardwareSpec;
+  runtime: RuntimeKey;
   onChange: (patch: Partial<HardwareSpec>) => void;
+  onRuntimeChange: (runtime: RuntimeKey) => void;
 }
 
-export function HardwarePanel({ hardware, onChange }: Props) {
+/** Runtimes that replace the Reserve % field with their own fixed memory fraction. */
+const RUNTIME_OVERRIDES_RESERVE: ReadonlySet<RuntimeKey> = new Set(['vllm', 'sglang']);
+
+export function HardwarePanel({ hardware, runtime, onChange, onRuntimeChange }: Props) {
   const gpuId = useId();
+  const runtimeId = useId();
   return (
     <section className="panel" aria-labelledby="hw-h">
       <h2 id="hw-h">Hardware</h2>
+      <div className="field">
+        <label htmlFor={runtimeId}>Runtime</label>
+        <select id={runtimeId} value={runtime} onChange={(e) => onRuntimeChange(e.target.value as RuntimeKey)}>
+          {RUNTIME_KEYS.map((key) => (
+            <option key={key} value={key}>
+              {RUNTIME_PROFILES[key].label}
+            </option>
+          ))}
+        </select>
+        <p className="help">{RUNTIME_PROFILES[runtime].blurb}</p>
+      </div>
       <div className="field">
         <label htmlFor={gpuId}>GPU</label>
         <select
@@ -78,7 +95,11 @@ export function HardwarePanel({ hardware, onChange }: Props) {
           max={50}
           step={1}
           onChange={(v) => onChange({ reservePct: v })}
-          help="VRAM kept free (vLLM's gpu_memory_utilization 0.95 = 5%)."
+          help={
+            RUNTIME_OVERRIDES_RESERVE.has(runtime)
+              ? `Ignored: ${RUNTIME_PROFILES[runtime].label} uses its own fixed memory fraction instead (see the runtime selector above).`
+              : "VRAM kept free (vLLM's gpu_memory_utilization 0.95 = 5%)."
+          }
         />
         <NumberField
           label="Overhead per GPU"
@@ -88,7 +109,11 @@ export function HardwarePanel({ hardware, onChange }: Props) {
           max={8}
           step={0.1}
           onChange={(v) => onChange({ overheadGB: v })}
-          help="CUDA context, activations, runtime buffers."
+          help={
+            runtime === 'vllm'
+              ? 'CUDA context, activations, runtime buffers, plus a 1 GB CUDA-graph allowance vLLM adds on top.'
+              : 'CUDA context, activations, runtime buffers.'
+          }
         />
       </div>
       {findGpuPreset(hardware.gpuName)?.vendor === 'apple' && (

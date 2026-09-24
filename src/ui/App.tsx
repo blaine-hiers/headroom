@@ -48,7 +48,12 @@ export default function App() {
             onEdit={(patch) => dispatch({ type: 'editModel', patch })}
           />
           <QuantPanel quant={state.quant} onChange={(patch) => dispatch({ type: 'quant', patch })} />
-          <HardwarePanel hardware={state.hardware} onChange={(patch) => dispatch({ type: 'hardware', patch })} />
+          <HardwarePanel
+            hardware={state.hardware}
+            runtime={state.runtime}
+            onChange={(patch) => dispatch({ type: 'hardware', patch })}
+            onRuntimeChange={(runtime) => dispatch({ type: 'runtime', runtime })}
+          />
           <WorkloadPanel
             workload={state.workload}
             maxContext={maxContextFor(state.model)}

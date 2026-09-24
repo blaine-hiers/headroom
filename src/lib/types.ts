@@ -2,6 +2,9 @@
 
 export type Attention = 'mha_gqa' | 'mla';
 
+/** Serving runtime whose memory-accounting rules and launch command apply. `generic` is today's behaviour. */
+export type RuntimeKey = 'generic' | 'vllm' | 'llamacpp' | 'sglang' | 'mlx';
+
 /** How active params were reached: all params, layer shapes, or the MoE params ratio. */
 export type ActiveParamsMethod = 'structural' | 'ratio' | 'dense';
 
@@ -109,6 +112,8 @@ export interface CalcState {
   quant: Quant;
   hardware: HardwareSpec;
   workload: Workload;
+  /** Serving runtime profile; defaults to 'generic' so existing links are unaffected. */
+  runtime: RuntimeKey;
 }
 
 /** Everything the results column needs; all sizes in bytes. */

@@ -8,7 +8,7 @@ import {
   MODEL_PRESETS,
   refreshWarnings,
 } from '../lib';
-import type { CalcState, HardwareSpec, ModelSpec, Quant, Workload } from '../lib';
+import type { CalcState, HardwareSpec, ModelSpec, Quant, RuntimeKey, Workload } from '../lib';
 
 export const MIN_CONTEXT = 256;
 export const MAX_USERS = 512;
@@ -32,6 +32,7 @@ export const defaultState: CalcState = {
     overheadGB: 1,
   },
   workload: { contextTokens: 8192, concurrentUsers: 1 },
+  runtime: 'generic',
 };
 
 export function clamp(v: number, lo: number, hi: number): number {
@@ -49,7 +50,8 @@ export type Action =
   | { type: 'editModel'; patch: Partial<ModelSpec> }
   | { type: 'quant'; patch: Partial<Quant> }
   | { type: 'hardware'; patch: Partial<HardwareSpec> }
-  | { type: 'workload'; patch: Partial<Workload> };
+  | { type: 'workload'; patch: Partial<Workload> }
+  | { type: 'runtime'; runtime: RuntimeKey };
 
 function clampWorkload(w: Workload, model: ModelSpec): Workload {
   return {
@@ -95,6 +97,8 @@ export function reducer(state: CalcState, action: Action): CalcState {
     }
     case 'workload':
       return { ...state, workload: clampWorkload({ ...state.workload, ...action.patch }, state.model) };
+    case 'runtime':
+      return { ...state, runtime: action.runtime };
   }
 }
 

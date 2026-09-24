@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { makeSpec } from './__fixtures__/makeSpec';
-import { calculate, effectiveVramGB, maxContext, maxUsers, overheadBytes, usableBytes } from './fit';
+import { calculate, effectiveVramGB, maxContext, maxUsers, overheadBytes, overheadBytesForRuntime, usableBytes, usableBytesForRuntime } from './fit';
 import { findGpuPreset } from './presets/gpus';
 import { findModelPreset } from './presets/models';
+import { SGLANG_MEM_FRACTION_STATIC, VLLM_GPU_MEMORY_UTILIZATION, VLLM_OVERHEAD_ALLOWANCE_GB } from './runtime';
 import type { CalcState, HardwareSpec } from './types';
 
 const h100x4: HardwareSpec = { gpuName: 'H100 SXM', gpuCount: 4, vramGB: 80, bandwidthGBs: 3350, reservePct: 5, overheadGB: 1 };
@@ -13,6 +14,7 @@ function state(overrides: Partial<CalcState> = {}): CalcState {
     quant: { weight: 'bf16', kv: 'fp16' },
     hardware: h100x4,
     workload: { contextTokens: 8192, concurrentUsers: 4 },
+    runtime: 'generic',
     ...overrides,
   };
 }
@@ -212,6 +214,7 @@ describe('calculate', () => {
       quant: { weight: 'bf16', kv: 'fp16' },
       hardware: { gpuName: gpu.name, gpuCount: 1, vramGB: gpu.vramGB, bandwidthGBs: gpu.bandwidthGBs, reservePct: 5, overheadGB: 1 },
       workload: { contextTokens: 2048, concurrentUsers: 1 },
+      runtime: 'generic',
     });
     expect(r.throughput.perUserTokS).toBeGreaterThan(40);
     expect(r.throughput.perUserTokS).toBeLessThan(45);
@@ -224,5 +227,62 @@ describe('calculate', () => {
     const b = calculate(state({ model: moe })).throughput.perUserTokS;
     expect(b).toBeGreaterThan(a);
     expect(calculate(state({ model: moe })).weightBytes).toBe(60e9); // all experts resident
+  });
+});
+
+describe('runtime profiles: generic is bit-identical to today', () => {
+  it('usableBytesForRuntime/overheadBytesForRuntime match the plain (pre-runtime) formulas for generic', () => {
+    expect(usableBytesForRuntime(h100x4, 'generic')).toBe(usableBytes(h100x4));
+    expect(overheadBytesForRuntime(h100x4, 'generic')).toBe(overheadBytes(h100x4));
+    // llama.cpp and MLX reuse the same generic accounting (no reserve-% or overhead override).
+    expect(usableBytesForRuntime(h100x4, 'llamacpp')).toBe(usableBytes(h100x4));
+    expect(usableBytesForRuntime(h100x4, 'mlx')).toBe(usableBytes(h100x4));
+  });
+
+  it("calculate() with runtime: 'generic' produces every number the pre-runtime calculator did", () => {
+    const s = state();
+    const r = calculate(s);
+    expect(r.usableBytes).toBe(usableBytes(s.hardware));
+    expect(r.overheadBytes).toBe(overheadBytes(s.hardware));
+    expect(r.kvBytesPerRequest).toBe(r.kvBytesPerToken * s.workload.contextTokens);
+  });
+});
+
+describe('runtime profiles: vLLM usable-memory maths', () => {
+  it('usable = gpuCount × effectiveVramGB × 1e9 × gpu_memory_utilization, ignoring reservePct', () => {
+    const hw: HardwareSpec = { ...h100x4, reservePct: 40 }; // a high reserve % must have no effect under vLLM
+    expect(usableBytesForRuntime(hw, 'vllm')).toBeCloseTo(hw.gpuCount * hw.vramGB * 1e9 * VLLM_GPU_MEMORY_UTILIZATION, 0);
+  });
+
+  it('adds a flat CUDA-graph/activation overhead allowance on top of the generic overhead', () => {
+    expect(overheadBytesForRuntime(h100x4, 'vllm')).toBe(overheadBytes(h100x4) + VLLM_OVERHEAD_ALLOWANCE_GB * 1e9 * h100x4.gpuCount);
+  });
+
+  it('rounds the KV per request up to a 16-token block multiple', () => {
+    const withOddContext = calculate(state({ runtime: 'vllm', workload: { contextTokens: 8193, concurrentUsers: 1 } }));
+    const withRoundedContext = calculate(state({ runtime: 'generic', workload: { contextTokens: 8208, concurrentUsers: 1 } }));
+    expect(withOddContext.kvBytesPerRequest).toBe(withRoundedContext.kvBytesPerRequest);
+  });
+
+  it('does not round a context that is already a block multiple', () => {
+    const exact = calculate(state({ runtime: 'vllm', workload: { contextTokens: 8192, concurrentUsers: 1 } }));
+    const generic = calculate(state({ runtime: 'generic', workload: { contextTokens: 8192, concurrentUsers: 1 } }));
+    expect(exact.kvBytesPerRequest).toBe(generic.kvBytesPerRequest);
+  });
+});
+
+describe('runtime profiles: SGLang usable-memory maths', () => {
+  it('usable = gpuCount × effectiveVramGB × 1e9 × mem_fraction_static, ignoring reservePct', () => {
+    const hw: HardwareSpec = { ...h100x4, reservePct: 40 };
+    expect(usableBytesForRuntime(hw, 'sglang')).toBeCloseTo(hw.gpuCount * hw.vramGB * 1e9 * SGLANG_MEM_FRACTION_STATIC, 0);
+    expect(overheadBytesForRuntime(hw, 'sglang')).toBe(overheadBytes(hw)); // no extra allowance
+  });
+});
+
+describe('runtime profiles: MLX builds on the Apple wired-memory limit, not a duplicate', () => {
+  it('an Apple GPU gets the same effective VRAM under MLX as under generic', () => {
+    const apple: HardwareSpec = { gpuName: 'Apple M2 Ultra', gpuCount: 1, vramGB: 192, bandwidthGBs: 800, reservePct: 5, overheadGB: 1 };
+    expect(usableBytesForRuntime(apple, 'mlx')).toBe(usableBytesForRuntime(apple, 'generic'));
+    expect(effectiveVramGB(apple.gpuName, apple.vramGB)).toBeLessThan(apple.vramGB); // wired limit applied
   });
 });

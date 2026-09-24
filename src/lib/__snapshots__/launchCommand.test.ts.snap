@@ -1,0 +1,35 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildLaunchCommand > matches a snapshot per runtime 1`] = `
+[
+  {
+    "command": null,
+    "notes": [],
+  },
+  {
+    "command": "vllm serve meta-llama/Llama-3.3-70B-Instruct --max-model-len 8192 --max-num-seqs 4 --gpu-memory-utilization 0.9",
+    "notes": [
+      "Starting point, not a guarantee: real usage also depends on --enforce-eager, batch size, and the model.",
+    ],
+  },
+  {
+    "command": "llama-server -hf meta-llama/Llama-3.3-70B-Instruct -c 32768 -np 4 -ngl 999",
+    "notes": [
+      "Starting point, not a guarantee: -ngl 999 offloads every layer, which needs enough VRAM for the whole model.",
+    ],
+  },
+  {
+    "command": "python -m sglang.launch_server --model-path meta-llama/Llama-3.3-70B-Instruct --context-length 8192 --max-running-requests 4 --mem-fraction-static 0.88",
+    "notes": [
+      "Starting point, not a guarantee: real usage also depends on batch size and the model.",
+    ],
+  },
+  {
+    "command": "mlx_lm.server --model meta-llama/Llama-3.3-70B-Instruct --max-kv-size 8192",
+    "notes": [
+      "Starting point, not a guarantee: mlx_lm.server serves one request at a time, so concurrent users share this context sequentially rather than in parallel.",
+      "Unified memory is shared with the OS — see the Apple wired-memory limit above.",
+    ],
+  },
+]
+`;

@@ -1,4 +1,5 @@
 import { KV_QUANTS, WEIGHT_QUANTS } from './quant';
+import { RUNTIME_KEYS } from './runtime';
 import type {
   Attention,
   CalcState,
@@ -42,6 +43,7 @@ const K = {
   appleWiredLimitGB: 'awl',
   contextTokens: 'c',
   concurrentUsers: 'u',
+  runtime: 'rt',
 } as const;
 
 const ATTENTIONS: readonly Attention[] = ['mha_gqa', 'mla'];
@@ -86,6 +88,7 @@ export function encodeState(state: CalcState): string {
   set(K.appleWiredLimitGB, h.appleWiredLimitGB);
   set(K.contextTokens, state.workload.contextTokens);
   set(K.concurrentUsers, state.workload.concurrentUsers);
+  set(K.runtime, state.runtime);
   return q.toString();
 }
 
@@ -203,6 +206,9 @@ export function decodeState(qs: string, fallback: CalcState): CalcState {
         contextTokens: num(K.contextTokens),
         concurrentUsers: num(K.concurrentUsers),
       },
+      // Missing key (a link shared before this profile existed) decodes as 'generic' — identical
+      // numbers to today. An unrecognized value invalidates the whole state, like every other field.
+      runtime: q.has(K.runtime) ? oneOf(q.get(K.runtime), RUNTIME_KEYS) : 'generic',
     };
   } catch {
     return fallback;
