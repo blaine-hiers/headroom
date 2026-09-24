@@ -86,7 +86,7 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
     <section className="panel" aria-labelledby="model-h">
       <h2 id="model-h">Model</h2>
       <RepoSearch
-        value={model.id}
+        loadedId={model.id}
         presets={MODEL_PRESETS}
         token={token || undefined}
         fetching={fetchState.kind === 'fetching'}
@@ -94,6 +94,30 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
         onSelectPreset={pickPreset}
         onSelectHub={(id) => void doFetch(id)}
       />
+
+      <p className={`status status-${fetchState.kind}`} aria-live="polite" role="status">
+        {fetchState.kind === 'fetching' && <>Fetching {fetchState.id}…</>}
+        {fetchState.kind === 'error' && (
+          <>
+            Error: {fetchState.error}
+            {fallback && (
+              <>
+                {' '}
+                <button type="button" className="link-btn" onClick={() => pickPreset(fallback)}>
+                  Use the built-in {fallback.name} preset
+                </button>
+              </>
+            )}
+          </>
+        )}
+        {fetchState.kind === 'idle' && (
+          <>
+            <span className="muted">Loaded: </span>
+            <strong title={model.id}>{model.name}</strong> <span className="muted">· {SOURCE_LABEL[model.source]}</span>
+            {fetchState.note && <span className="muted"> · {fetchState.note}</span>}
+          </>
+        )}
+      </p>
 
       {gguf && (
         <div className="field">
@@ -153,29 +177,6 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
           </button>
         </div>
       )}
-
-      <p className={`status status-${fetchState.kind}`} aria-live="polite" role="status">
-        {fetchState.kind === 'fetching' && <>Fetching {fetchState.id}…</>}
-        {fetchState.kind === 'error' && (
-          <>
-            Error: {fetchState.error}
-            {fallback && (
-              <>
-                {' '}
-                <button type="button" className="link-btn" onClick={() => pickPreset(fallback)}>
-                  Use the built-in {fallback.name} preset
-                </button>
-              </>
-            )}
-          </>
-        )}
-        {fetchState.kind === 'idle' && (
-          <>
-            <strong>{model.name}</strong> <span className="muted">· {SOURCE_LABEL[model.source]}</span>
-            {fetchState.note && <span className="muted"> · {fetchState.note}</span>}
-          </>
-        )}
-      </p>
 
       <details className="disclosure">
         <summary>Gated models</summary>

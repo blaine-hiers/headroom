@@ -59,9 +59,14 @@ export function TaskPicker({ planner, dispatch, openInCalculator }: Props) {
   const { rows, hint } = useMemo(() => rankModelsForTask(MODEL_CATALOG, constraints), [constraints]);
 
   return (
-    <section className="panel" aria-label="Which model for this task?">
-      <h2>Which model for this task?</h2>
-      <div className="grid2">
+    <section className="panel step" aria-label="Which model for this task?">
+      <h2>
+        <span className="step-num" aria-hidden="true">
+          1
+        </span>
+        <span>Which model for this task?</span>
+      </h2>
+      <div className="controls">
         <div className="field">
           <label htmlFor={taskId}>Task</label>
           <select id={taskId} value={constraints.task} onChange={(e) => setConstraints({ task: e.target.value as TaskPickerConstraints['task'] })}>
@@ -83,8 +88,6 @@ export function TaskPicker({ planner, dispatch, openInCalculator }: Props) {
             ))}
           </select>
         </div>
-      </div>
-      <div className="grid2">
         <div className="field">
           <label htmlFor={gpuCountId}>How many GPUs</label>
           <input
@@ -115,25 +118,23 @@ export function TaskPicker({ planner, dispatch, openInCalculator }: Props) {
             }}
           />
         </div>
-      </div>
-      <div className="field">
-        <label htmlFor={contextId}>Context needed</label>
-        <div className="input-wrap">
-          <input
-            id={contextId}
-            type="number"
-            min={MIN_CONTEXT}
-            step={1024}
-            value={constraints.contextTokens}
-            onChange={(e) => {
-              const n = Number(e.target.value);
-              if (Number.isFinite(n)) setConstraints({ contextTokens: Math.max(MIN_CONTEXT, Math.round(n)) });
-            }}
-          />
-          <span className="suffix">tokens</span>
+        <div className="field">
+          <label htmlFor={contextId}>Context needed</label>
+          <div className="input-wrap">
+            <input
+              id={contextId}
+              type="number"
+              min={MIN_CONTEXT}
+              step={1024}
+              value={constraints.contextTokens}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                if (Number.isFinite(n)) setConstraints({ contextTokens: Math.max(MIN_CONTEXT, Math.round(n)) });
+              }}
+            />
+            <span className="suffix">tokens</span>
+          </div>
         </div>
-      </div>
-      <div className="grid2">
         <div className="field">
           <label htmlFor={weightQuantId}>Weight quant</label>
           <select id={weightQuantId} value={constraints.weightQuant} onChange={(e) => setConstraints({ weightQuant: e.target.value as WeightQuantKey })}>
@@ -154,8 +155,6 @@ export function TaskPicker({ planner, dispatch, openInCalculator }: Props) {
             ))}
           </select>
         </div>
-      </div>
-      <div className="grid2">
         <div className="field">
           <label htmlFor={licenseId}>License</label>
           <select
@@ -167,11 +166,9 @@ export function TaskPicker({ planner, dispatch, openInCalculator }: Props) {
             <option value="permissive">Permissive only ({PERMISSIVE_LICENSES.map((l) => l.toUpperCase()).join(', ')})</option>
           </select>
         </div>
-        <div className="field">
-          <label>
-            <input type="checkbox" checked={constraints.allowMoe} onChange={(e) => setConstraints({ allowMoe: e.target.checked })} /> Allow MoE models
-          </label>
-        </div>
+        <label className="check controls-check">
+          <input type="checkbox" checked={constraints.allowMoe} onChange={(e) => setConstraints({ allowMoe: e.target.checked })} /> Allow MoE models
+        </label>
       </div>
       <p className="help">{TASK_PICKER_RULE}</p>
       {hint ? (

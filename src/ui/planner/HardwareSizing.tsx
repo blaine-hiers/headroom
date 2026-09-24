@@ -141,8 +141,13 @@ export function HardwareSizing({ planner, dispatch, openInCalculator, calculator
   const useRow = (row: HardwareSizingRow) => openInCalculator(row.state);
 
   return (
-    <section className="panel" aria-label="What hardware to serve N users?">
-      <h2>What hardware to serve N users?</h2>
+    <section className="panel step" aria-label="What hardware to serve N users?">
+      <h2>
+        <span className="step-num" aria-hidden="true">
+          2
+        </span>
+        <span>What hardware to serve N users?</span>
+      </h2>
 
       <div className="field">
         <label htmlFor={`${modelListId}-input`}>Model</label>
@@ -176,7 +181,7 @@ export function HardwareSizing({ planner, dispatch, openInCalculator, calculator
         Use the Calculator's current model{calculatorModel ? ` (${calculatorModel.name})` : ''}
       </label>
 
-      <div className="grid2">
+      <div className="controls">
         <NumberField
           label="Users to serve"
           value={hs.concurrentUsers}
@@ -196,14 +201,6 @@ export function HardwareSizing({ planner, dispatch, openInCalculator, calculator
           integer
           onChange={(v) => patch({ contextTokens: v })}
         />
-      </div>
-      {effectiveLoad.contextTokens !== hs.contextTokens && (
-        <p className="help">
-          Sizing at {formatNumber(effectiveLoad.contextTokens)} tok context — {model.name}'s max, below the {formatNumber(hs.contextTokens)} tok typed above.
-        </p>
-      )}
-
-      <div className="grid2">
         <div className="field">
           <label htmlFor={weightQuantId}>Weight quant</label>
           <select id={weightQuantId} value={hs.weightQuant} onChange={(e) => patch({ weightQuant: e.target.value as WeightQuantKey })}>
@@ -224,9 +221,6 @@ export function HardwareSizing({ planner, dispatch, openInCalculator, calculator
             ))}
           </select>
         </div>
-      </div>
-
-      <div className="grid2">
         <div className="field">
           <label htmlFor={runtimeId}>Serving runtime</label>
           <select id={runtimeId} value={hs.runtime} onChange={(e) => patch({ runtime: e.target.value as RuntimeKey })}>
@@ -252,9 +246,6 @@ export function HardwareSizing({ planner, dispatch, openInCalculator, calculator
             ))}
           </select>
         </div>
-      </div>
-
-      <div className="grid2">
         <NumberField
           label="Min per-user decode"
           suffix="tok/s"
@@ -286,20 +277,23 @@ export function HardwareSizing({ planner, dispatch, openInCalculator, calculator
             />
           )}
         </div>
+        <div className="field">
+          <label htmlFor={sortId}>Sort qualifying rows by</label>
+          <select id={sortId} value={hs.sort} onChange={(e) => patch({ sort: e.target.value as HardwareSizingSort })}>
+            <option value="smallest">Smallest first (total VRAM)</option>
+            <option value="cheapest">Cheapest cloud $/hr</option>
+          </select>
+        </div>
       </div>
-
+      {effectiveLoad.contextTokens !== hs.contextTokens && (
+        <p className="help">
+          Sizing at {formatNumber(effectiveLoad.contextTokens)} tok context — {model.name}'s max, below the {formatNumber(hs.contextTokens)} tok typed above.
+        </p>
+      )}
       <label className="check">
         <input type="checkbox" checked={hs.offloadEnabled} onChange={(e) => patch({ offloadEnabled: e.target.checked })} />
         Allow CPU/RAM offload for layers that don't fit
       </label>
-
-      <div className="field">
-        <label htmlFor={sortId}>Sort qualifying rows by</label>
-        <select id={sortId} value={hs.sort} onChange={(e) => patch({ sort: e.target.value as HardwareSizingSort })}>
-          <option value="smallest">Smallest first (total VRAM)</option>
-          <option value="cheapest">Cheapest cloud $/hr</option>
-        </select>
-      </div>
 
       {qualifying.length === 0 && nearMisses.length === 0 ? (
         <p className="muted">Nothing in the bundled GPU table fits at 1, 2, 4 or 8 GPUs for this model, quant and workload.</p>
