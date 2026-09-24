@@ -195,6 +195,14 @@ describe('buildLaunchCommand with CPU/RAM offload and speculative decoding (#20)
     expect(notes[0]).toMatch(/-ngl 39 keeps 39 of 80 layers on the GPU/);
   });
 
+  it('llama.cpp: offload on but nothing spills keeps -ngl 999 so the output layer stays on the GPU', () => {
+    const s = offloaded({ runtime: 'llamacpp', model: makeSpec({ id: 'bartowski/Llama-3.1-8B-Instruct-GGUF', params: 8e9, numLayers: 32 }) });
+    expect(calculate(s).offload.cpuLayers).toBe(0);
+    const { command, notes } = buildLaunchCommand(s);
+    expect(command).toMatch(/-ngl 999$/);
+    expect(notes[0]).toMatch(/-ngl 999/);
+  });
+
   it('llama.cpp: offload OFF still emits -ngl 999 with its note', () => {
     const s = offloaded({ runtime: 'llamacpp', hardware: { ...rtx4090, offload: { enabled: false, systemRamGB: 64, ramBandwidthGBs: 50 } } });
     const { command, notes } = buildLaunchCommand(s);

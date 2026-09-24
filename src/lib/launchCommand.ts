@@ -108,13 +108,15 @@ export function buildLaunchCommand(state: CalcState): LaunchCommand {
       const isGguf = looksLikeGgufRepo(id);
       const parts = [isGguf ? `llama-server -hf ${quotedId}` : 'llama-server -m /path/to/model.gguf', `-c ${totalCtx}`];
       if (N > 1) parts.push(`-np ${N}`);
-      // Offload on: the computed GPU layer count (what the verdict shows). Off: every layer on the GPU.
-      parts.push(offloadPlan ? `-ngl ${offloadPlan.gpuLayers}` : '-ngl 999');
+      // Layers spilling to RAM: the computed GPU layer count (what the verdict shows). Otherwise
+      // 999, not numLayers: llama.cpp only puts the output layer on the GPU when ngl > n_layer.
+      const spill = offloadPlan && offloadPlan.cpuLayers > 0 ? offloadPlan : null;
+      parts.push(spill ? `-ngl ${spill.gpuLayers}` : '-ngl 999');
       const cacheType = llamaCppCacheType(quant.kv);
       if (cacheType !== LLAMACPP_DEFAULT_CACHE_TYPE) parts.push(`--cache-type-k ${cacheType}`, `--cache-type-v ${cacheType}`);
       const notes = [
-        offloadPlan
-          ? `Starting point, not a guarantee: -ngl ${offloadPlan.gpuLayers} keeps ${offloadPlan.gpuLayers} of ${model.numLayers} layers on the GPU and runs the other ${offloadPlan.cpuLayers} from system RAM.`
+        spill
+          ? `Starting point, not a guarantee: -ngl ${spill.gpuLayers} keeps ${spill.gpuLayers} of ${model.numLayers} layers on the GPU and runs the other ${spill.cpuLayers} from system RAM.`
           : 'Starting point, not a guarantee: -ngl 999 offloads every layer, which needs enough VRAM for the whole model.',
       ];
       if (offloadPlan && !offloadPlan.fitsInRam) notes.push(OFFLOAD_DOES_NOT_RUN_NOTE);
