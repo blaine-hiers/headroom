@@ -2,12 +2,38 @@ import { kvBytesForContext, kvBytesPerToken } from './kvcache';
 import { decodeThroughput } from './throughput';
 import type { CalcResult, CalcState, HardwareSpec } from './types';
 import { activeParamsDetailed, weightBytes } from './weights';
+import { findGpuPreset } from './presets/gpus';
 
 export const TABLE_CONTEXTS = [2048, 8192, 32768, 131072] as const;
 
-/** usable = gpuCount × vramGB × 1e9 × (1 − reservePct/100). */
+/**
+ * Computes the effective usable VRAM per GPU, accounting for macOS GPU wired-memory limits on Apple.
+ * macOS caps GPU-wired memory at: 0.67 × RAM for ≤36 GB, 0.75 × RAM above that.
+ * These are the observed defaults reported by the MLX and llama.cpp communities; raise them with
+ * `sudo sysctl iogpu.wired_limit_mb=<MB>`. See: https://developer.apple.com/forums/thread/752815
+ */
+export function effectiveVramGB(gpuName: string, vramGB: number, appleWiredLimitGB?: number): number {
+  const gpu = findGpuPreset(gpuName);
+  if (!gpu || gpu.vendor !== 'apple') {
+    return vramGB;
+  }
+
+  // Apple GPU: apply wired-memory limit
+  // If user provided an override, use it; otherwise use the default OS limit
+  if (appleWiredLimitGB !== undefined) {
+    return Math.min(vramGB, appleWiredLimitGB);
+  }
+
+  // Default macOS wired-memory limit based on total RAM
+  // ≤36 GB: 0.67×, >36 GB: 0.75×
+  const limit = vramGB <= 36 ? vramGB * 0.67 : vramGB * 0.75;
+  return limit;
+}
+
+/** usable = gpuCount × effectiveVramGB × 1e9 × (1 − reservePct/100). */
 export function usableBytes(hw: HardwareSpec): number {
-  return hw.gpuCount * hw.vramGB * 1e9 * (1 - hw.reservePct / 100);
+  const effectiveVram = effectiveVramGB(hw.gpuName, hw.vramGB, hw.appleWiredLimitGB);
+  return hw.gpuCount * effectiveVram * 1e9 * (1 - hw.reservePct / 100);
 }
 
 /** Runtime overhead across all GPUs: overheadGB × 1e9 × gpuCount. */

@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import { GPU_PRESETS } from '../lib';
+import { GPU_PRESETS, findGpuPreset } from '../lib';
 import type { GpuVendor, HardwareSpec } from '../lib';
 import { NumberField, Stepper } from './NumberField';
 import { MAX_GPUS } from './state';
@@ -24,7 +24,20 @@ export function HardwarePanel({ hardware, onChange }: Props) {
       <h2 id="hw-h">Hardware</h2>
       <div className="field">
         <label htmlFor={gpuId}>GPU</label>
-        <select id={gpuId} value={hardware.gpuName} onChange={(e) => onChange({ gpuName: e.target.value })}>
+        <select
+          id={gpuId}
+          value={hardware.gpuName}
+          onChange={(e) => {
+            const newGpuName = e.target.value;
+            const newGpu = findGpuPreset(newGpuName);
+            const patch: Partial<HardwareSpec> = { gpuName: newGpuName };
+            // Clear appleWiredLimitGB when switching to a non-Apple GPU
+            if (newGpu?.vendor !== 'apple' && hardware.appleWiredLimitGB !== undefined) {
+              patch.appleWiredLimitGB = undefined;
+            }
+            onChange(patch);
+          }}
+        >
           {VENDORS.map((v) => (
             <optgroup key={v.vendor} label={v.label}>
               {GPU_PRESETS.filter((g) => g.vendor === v.vendor).map((g) => (
@@ -78,6 +91,32 @@ export function HardwarePanel({ hardware, onChange }: Props) {
           help="CUDA context, activations, runtime buffers."
         />
       </div>
+      {findGpuPreset(hardware.gpuName)?.vendor === 'apple' && (
+        <details className="panel-details">
+          <summary>Apple wired-memory limit</summary>
+          <p>
+            macOS caps GPU-wired memory: 0.67× RAM for ≤36 GB, 0.75× above. Raise it with{' '}
+            <code>sudo sysctl iogpu.wired_limit_mb=...</code> — headroom will use your override here if set.
+          </p>
+          <div className="field">
+            <label htmlFor={`${gpuId}-awl`}>GPU-wired limit (leave blank for default)</label>
+            <input
+              id={`${gpuId}-awl`}
+              type="number"
+              min="0.1"
+              max="4096"
+              step="1"
+              value={hardware.appleWiredLimitGB ?? ''}
+              onChange={(e) => {
+                const v = e.target.value.trim();
+                onChange({ appleWiredLimitGB: v === '' ? undefined : Math.max(0.1, Math.min(4096, Number(v))) });
+              }}
+              placeholder="e.g. 120"
+            />
+            <small>Custom GPU-wired memory limit in GB. Leave blank to use macOS default.</small>
+          </div>
+        </details>
+      )}
     </section>
   );
 }

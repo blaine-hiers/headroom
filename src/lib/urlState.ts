@@ -39,6 +39,7 @@ const K = {
   bandwidthGBs: 'bw',
   reservePct: 'rp',
   overheadGB: 'oh',
+  appleWiredLimitGB: 'awl',
   contextTokens: 'c',
   concurrentUsers: 'u',
 } as const;
@@ -82,6 +83,7 @@ export function encodeState(state: CalcState): string {
   set(K.bandwidthGBs, h.bandwidthGBs);
   set(K.reservePct, h.reservePct);
   set(K.overheadGB, h.overheadGB);
+  set(K.appleWiredLimitGB, h.appleWiredLimitGB);
   set(K.contextTokens, state.workload.contextTokens);
   set(K.concurrentUsers, state.workload.concurrentUsers);
   return q.toString();
@@ -184,14 +186,19 @@ export function decodeState(qs: string, fallback: CalcState): CalcState {
         weight: oneOf(q.get(K.weightQuant), Object.keys(WEIGHT_QUANTS) as WeightQuantKey[]),
         kv: oneOf(q.get(K.kvQuant), Object.keys(KV_QUANTS) as KvQuantKey[]),
       },
-      hardware: {
-        gpuName: str(K.gpuName),
-        gpuCount: num(K.gpuCount),
-        vramGB: num(K.vramGB),
-        bandwidthGBs: num(K.bandwidthGBs),
-        reservePct: num(K.reservePct),
-        overheadGB: num(K.overheadGB),
-      },
+      hardware: (() => {
+        const hw = {
+          gpuName: str(K.gpuName),
+          gpuCount: num(K.gpuCount),
+          vramGB: num(K.vramGB),
+          bandwidthGBs: num(K.bandwidthGBs),
+          reservePct: num(K.reservePct),
+          overheadGB: num(K.overheadGB),
+        };
+        const appleWiredLimit = optNum(K.appleWiredLimitGB);
+        if (appleWiredLimit !== undefined) (hw as any).appleWiredLimitGB = appleWiredLimit;
+        return hw;
+      })(),
       workload: {
         contextTokens: num(K.contextTokens),
         concurrentUsers: num(K.concurrentUsers),
