@@ -1,7 +1,8 @@
 import { effectiveBitsPerWeight, formatNumber, formatSeconds, formatTokens, KV_QUANTS, WEIGHT_QUANTS } from '../lib';
-import type { ActiveParamsMethod, CalcResult, CalcState } from '../lib';
+import type { ActiveParamsMethod, CalcResult, CalcState, WeightQuantKey } from '../lib';
 import { Bytes } from './Bytes';
 import { Chart } from './Chart';
+import { FitMatrix } from './FitMatrix';
 import { LaunchCommand } from './LaunchCommand';
 import { ShowTheMath } from './ShowTheMath';
 import { fitLevel } from './state';
@@ -9,6 +10,7 @@ import { fitLevel } from './state';
 interface Props {
   state: CalcState;
   result: CalcResult;
+  onApplyFit: (weight: WeightQuantKey, contextTokens: number) => void;
 }
 
 const BADGE_TEXT = { fits: 'Fits', tight: 'Tight', nofit: 'Does not fit' } as const;
@@ -46,7 +48,7 @@ function tensorParallelWarnings(tp: CalcResult['tensorParallel'], numKvHeads: nu
   return msgs;
 }
 
-export function Results({ state, result }: Props) {
+export function Results({ state, result, onApplyFit }: Props) {
   const { workload, quant, hardware, model } = state;
   const N = workload.concurrentUsers;
   const C = workload.contextTokens;
@@ -180,6 +182,8 @@ export function Results({ state, result }: Props) {
           </table>
         </div>
       </div>
+
+      <FitMatrix state={state} onApply={onApplyFit} />
 
       <div className="card">
         <h3>Decode throughput</h3>
