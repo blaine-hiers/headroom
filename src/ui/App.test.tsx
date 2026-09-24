@@ -631,4 +631,15 @@ describe('Tabs (#21)', () => {
     expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
   });
 
+  it("clearing the Planner never brings back the Calculator's undo notice", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Clear calculator' }));
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    await user.click(screen.getByRole('tab', { name: 'Planner' }));
+    await user.click(screen.getByRole('button', { name: 'Clear planner' }));
+    await user.click(screen.getByRole('tab', { name: 'Calculator' }));
+    const calcPanel = document.getElementById('tabpanel-calculator')!;
+    expect(within(calcPanel).queryByRole('status')).not.toBeInTheDocument();
+  });
 });
