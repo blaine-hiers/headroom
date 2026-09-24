@@ -354,6 +354,38 @@ describe('App', () => {
     expect(screen.getByLabelText('Concurrent users')).toHaveValue(1);
   });
 
+  it('compare mode: a GGUF picker loaded in column B does not follow the user to column A (#20)', async () => {
+    const listing = {
+      siblings: [
+        { rfilename: 'Qwen_Qwen3-30B-A3B-Q4_K_M.gguf', size: 18_556_686_080 },
+        { rfilename: 'Qwen_Qwen3-30B-A3B-Q8_0.gguf', size: 32_483_935_968 },
+      ],
+      gguf: { total: 30_532_122_624 },
+    };
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('?blobs=true')) return Promise.resolve(jsonResponse(listing));
+      if (url.includes('/api/models/')) return Promise.resolve(jsonResponse({}));
+      if (url.endsWith('config.json')) return Promise.resolve(jsonResponse({ error: 'Entry not found' }, 404));
+      return Promise.resolve(new Response(fromBase64(qwenMoeB64), { status: 206 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Compare' }));
+    await user.click(screen.getByRole('button', { name: 'B' }));
+    const input = screen.getByLabelText('Hugging Face repo id');
+    await user.clear(input);
+    await user.type(input, 'bartowski/Qwen_Qwen3-30B-A3B-GGUF{Enter}');
+    expect(await screen.findByLabelText('GGUF file')).toHaveValue('Qwen_Qwen3-30B-A3B-Q4_K_M.gguf');
+
+    // Back to A: A never loaded a GGUF repo, so there must be no picker (which would load B's repo into A).
+    await user.click(screen.getByRole('button', { name: 'A' }));
+    expect(screen.queryByLabelText('GGUF file')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Hugging Face repo id')).toHaveValue('meta-llama/Llama-3.3-70B-Instruct');
+    expect(screen.getByLabelText('Weights')).toHaveValue('bf16');
+  });
+
   it('compare mode round-trips a 2-column URL and turning it off drops the extra column from the URL', async () => {
     const user = userEvent.setup();
     render(<App />);

@@ -110,7 +110,10 @@ export default function App() {
       <Header getLink={getLink} compareOn={compareOn} onToggleCompare={toggleCompare} />
       <main className="layout">
         <div className="inputs">
+          {/* Keyed by column: the GGUF picker, fetch status and search text are per-column local
+              state, so switching columns must remount rather than carry B's picker over to A. */}
           <ModelPanel
+            key={selected}
             model={activeState.model}
             onLoad={(spec) => activeDispatch({ type: 'loadModel', spec })}
             onEdit={(patch) => activeDispatch({ type: 'editModel', patch })}
