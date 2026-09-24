@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer } from 'react';
 import { calculate, DISABLED_SPECULATIVE, encodeState } from '../lib';
 import type { CalcState, WeightQuantKey } from '../lib';
+import { HardwareFinder } from './HardwareFinder';
 import { HardwarePanel } from './HardwarePanel';
 import { Header } from './Header';
 import { ModelPanel } from './ModelPanel';
@@ -60,6 +61,7 @@ export default function App() {
             onChange={(patch) => dispatch({ type: 'hardware', patch })}
             onRuntimeChange={(runtime) => dispatch({ type: 'runtime', runtime })}
           />
+          <HardwareFinder state={state} onApply={(patch) => dispatch({ type: 'hardware', patch })} />
           <WorkloadPanel
             workload={state.workload}
             maxContext={maxContextFor(state.model)}

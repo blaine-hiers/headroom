@@ -12,6 +12,7 @@ Headroom is a local-LLM VRAM and KV-cache calculator. Give it a Hugging Face rep
 - optionally, a cloud cost: $/hour and $ per million output tokens, given a $/GPU-hour price
 - an optional speculative-decoding estimate: draft-model memory and decode speedup
 - a fit matrix: a weight-quant × context-length heatmap of max users for your current model, GPUs and user count — click a cell to load it
+- reverse hardware search: which bundled GPU presets and counts fit your current model, quant and workload (*Which hardware fits?*)
 
 It runs entirely in the browser. There is no backend and no account. The whole calculator state lives in the URL, so you can share a link to it.
 

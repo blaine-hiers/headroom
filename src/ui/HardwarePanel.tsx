@@ -1,17 +1,9 @@
 import { useId } from 'react';
-import { GPU_PRESETS, RUNTIME_KEYS, RUNTIME_PROFILES, findGpuPreset } from '../lib';
-import type { GpuVendor, HardwareSpec, RuntimeKey } from '../lib';
+import { GPU_PRESETS, GPU_VENDOR_GROUPS, RUNTIME_KEYS, RUNTIME_PROFILES, findGpuPreset } from '../lib';
+import type { HardwareSpec, RuntimeKey } from '../lib';
 import { NumberField, Stepper } from './NumberField';
 import { OffloadFields } from './OffloadFields';
 import { MAX_GPUS } from './state';
-
-const VENDORS: Array<{ vendor: GpuVendor; label: string }> = [
-  { vendor: 'nvidia-consumer', label: 'NVIDIA consumer / workstation' },
-  { vendor: 'nvidia-datacenter', label: 'NVIDIA datacenter' },
-  { vendor: 'amd', label: 'AMD' },
-  { vendor: 'apple', label: 'Apple (unified memory)' },
-  { vendor: 'other', label: 'Other' },
-];
 
 interface Props {
   hardware: HardwareSpec;
@@ -56,7 +48,7 @@ export function HardwarePanel({ hardware, runtime, onChange, onRuntimeChange }: 
             onChange(patch);
           }}
         >
-          {VENDORS.map((v) => (
+          {GPU_VENDOR_GROUPS.map((v) => (
             <optgroup key={v.vendor} label={v.label}>
               {GPU_PRESETS.filter((g) => g.vendor === v.vendor).map((g) => (
                 <option key={g.name} value={g.name}>

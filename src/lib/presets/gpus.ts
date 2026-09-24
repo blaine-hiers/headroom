@@ -19,6 +19,15 @@ export interface GpuPreset {
 
 export const CUSTOM_GPU_NAME = 'Custom';
 
+/** Vendor groups in display order, shared by the GPU select and the hardware finder's filter. */
+export const GPU_VENDOR_GROUPS: Array<{ vendor: GpuVendor; label: string }> = [
+  { vendor: 'nvidia-consumer', label: 'NVIDIA consumer / workstation' },
+  { vendor: 'nvidia-datacenter', label: 'NVIDIA datacenter' },
+  { vendor: 'amd', label: 'AMD' },
+  { vendor: 'apple', label: 'Apple (unified memory)' },
+  { vendor: 'other', label: 'Other' },
+];
+
 // tflopsBf16: dense (no 2:4-sparsity) FP16/BF16 tensor-core TFLOPS with FP32 accumulate.
 // NVIDIA datacenter parts (A10, A100, H100, H200, B200, L4, L40S) and AMD MI300X publish this
 // figure directly in their datasheets/architecture whitepapers. For GeForce/RTX-workstation
