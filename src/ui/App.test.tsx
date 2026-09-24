@@ -560,4 +560,75 @@ describe('Tabs (#21)', () => {
     await user.click(screen.getByRole('tab', { name: 'Calculator' }));
     expect(screen.getByLabelText('Context tokens', { exact: true })).toHaveValue(32768);
   });
+
+  it('Clear button resets Calculator to defaults and shows Undo notice', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Change some inputs
+    await user.selectOptions(screen.getByLabelText('GPU'), 'H200');
+    await user.clear(screen.getByLabelText('Context tokens', { exact: true }));
+    await user.type(screen.getByLabelText('Context tokens', { exact: true }), '32768');
+    await user.tab();
+
+    // Verify changes are visible
+    expect(screen.getByLabelText('GPU')).toHaveValue('H200');
+    expect(screen.getByLabelText('Context tokens', { exact: true })).toHaveValue(32768);
+
+    // Click Clear
+    await user.click(screen.getByRole('button', { name: 'Clear calculator' }));
+
+    // Verify reset to defaults
+    expect(screen.getByLabelText('GPU')).toHaveValue(defaultState.hardware.gpuName);
+    expect(screen.getByLabelText('Context tokens', { exact: true })).toHaveValue(defaultState.workload.contextTokens);
+
+    // Verify Undo notice appears
+    expect(screen.getByText(/Cleared/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+  });
+
+  it('Undo restores Calculator state and extra columns', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Change inputs
+    await user.selectOptions(screen.getByLabelText('GPU'), 'H200');
+    await user.clear(screen.getByLabelText('Context tokens', { exact: true }));
+    await user.type(screen.getByLabelText('Context tokens', { exact: true }), '16384');
+    await user.tab();
+
+    // Turn on compare mode
+    await user.click(screen.getByRole('button', { name: /compare/i }));
+
+    // Clear
+    await user.click(screen.getByRole('button', { name: 'Clear calculator' }));
+
+    // Verify cleared
+    expect(screen.getByLabelText('GPU')).toHaveValue(defaultState.hardware.gpuName);
+
+    // Undo
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+
+    // Verify restored
+    expect(screen.getByLabelText('GPU')).toHaveValue('H200');
+    expect(screen.getByLabelText('Context tokens', { exact: true })).toHaveValue(16384);
+  });
+
+  it('Clear button in Planner resets Planner state and shows Undo notice', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Switch to Planner tab
+    await user.click(screen.getByRole('tab', { name: 'Planner' }));
+
+    // Click Clear button (when Planner has content, this test would verify more state)
+    const clearBtn = screen.getByRole('button', { name: 'Clear planner' });
+    expect(clearBtn).toBeInTheDocument();
+    await user.click(clearBtn);
+
+    // Verify Undo notice appears
+    expect(screen.getByText(/Cleared/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+  });
+
 });

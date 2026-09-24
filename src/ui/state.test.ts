@@ -228,3 +228,22 @@ describe('reducer: loadPartial (openInCalculator handoff)', () => {
     expect(s.quant.weight).not.toBeUndefined();
   });
 });
+
+describe('reducer: reset (#26 Clear button)', () => {
+  it('returns exactly the defaultState', () => {
+    const modified = reducer(defaultState, { type: 'hardware', patch: { gpuName: 'H100 SXM', gpuCount: 2 } });
+    const cleared = reducer(modified, { type: 'reset' });
+    expect(cleared).toEqual(defaultState);
+  });
+
+  it('resets all state slices to defaults after multiple changes', () => {
+    let s = defaultState;
+    s = reducer(s, { type: 'hardware', patch: { gpuCount: 4 } });
+    s = reducer(s, { type: 'workload', patch: { contextTokens: 32768, concurrentUsers: 10 } });
+    s = reducer(s, { type: 'quant', patch: { weight: 'q4_k_m' } });
+    s = reducer(s, { type: 'runtime', runtime: 'vllm' });
+
+    const cleared = reducer(s, { type: 'reset' });
+    expect(cleared).toEqual(defaultState);
+  });
+});

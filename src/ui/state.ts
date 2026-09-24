@@ -68,7 +68,8 @@ export type Action =
   | { type: 'workload'; patch: Partial<Workload> }
   | { type: 'runtime'; runtime: RuntimeKey }
   | { type: 'speculative'; patch: Partial<SpeculativeConfig> }
-  | { type: 'loadPartial'; patch: OpenInCalculatorPatch };
+  | { type: 'loadPartial'; patch: OpenInCalculatorPatch }
+  | { type: 'reset' };
 
 function clampWorkload(w: Workload, model: ModelSpec): Workload {
   return {
@@ -143,6 +144,8 @@ export function reducer(state: CalcState, action: Action): CalcState {
       if (patch.runtime !== undefined) next = { ...next, runtime: patch.runtime };
       return next;
     }
+    case 'reset':
+      return defaultState;
   }
 }
 
