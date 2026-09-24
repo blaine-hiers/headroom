@@ -9,6 +9,7 @@ Headroom is a local-LLM VRAM and KV-cache calculator. Give it a Hugging Face rep
 - total VRAM for N concurrent users, compared with usable VRAM
 - the most users that fit at your context, and the longest context that fits for your users
 - a bandwidth-bound decode-speed estimate
+- an optional speculative-decoding estimate: draft-model memory and decode speedup
 
 It runs entirely in the browser. There is no backend and no account. The whole calculator state lives in the URL, so you can share a link to it.
 
@@ -105,6 +106,15 @@ All sizes are in bytes.
 - `stepsPerSec = bandwidthGBs × 1e9 × gpuCount × efficiency / bytesPerStep(N)`. With more than one GPU this assumes tensor parallelism, so bandwidth adds up — but real tensor-parallel communication (all-reduce between GPUs each step) is not otherwise modeled, so `efficiency` carries a small labelled scaling penalty for it: `efficiency = 0.7 × 0.9^log2(gpuCount)`, i.e. ×0.9 for each doubling of GPU count (1 at a single GPU, so single-GPU numbers are unchanged).
 - per-user tok/s = `stepsPerSec`; aggregate tok/s = `stepsPerSec × N`
 - Prefill (time to first token) is compute-bound and is not estimated.
+
+**Speculative decoding** (optional, off by default — a *Speculative decoding* disclosure). A small draft model proposes `k` tokens per step; the target verifies them in one pass and keeps the accepted prefix.
+
+- **Draft model**: a preset (its own `ModelSpec`, so its KV cache is estimated exactly the same way as the target's), a manually entered parameter count (weights only — no KV estimate, since the architecture is unknown), or "none" (n-gram / prompt-lookup drafting: no model, no memory, no per-step cost).
+- **Memory**: the draft's weights at its own chosen quant, plus its KV cache at the target's context and user count, are added to the fit calculation (`fixed` and `total`) exactly like the target's own weights and KV.
+- **Expected tokens per verify step**: `E = (1 − α^(k+1)) / (1 − α)`, i.e. `Σ α^i` for `i = 0..k`. This is a removable 0/0 singularity at `α = 1`; the limit there is `k + 1` (every draft token accepted, plus the target's own bonus token). At `α = 0` it is `1` (the target always falls back to generating on its own).
+- **Verify step time**: `targetStepSeconds + k × draftStepSeconds`, where each step time is `1 / stepsPerSec` from the same bandwidth-bound decode formula above — the draft model reuses the target's own `efficiency` (same GPUs, same tensor-parallel penalty), not a separate check for the draft's own head count. n-gram/prompt-lookup drafting has no model forward pass, so `draftStepSeconds = 0`.
+- **Speculative tok/s** = `E / verifyStepSeconds` per user; the **multiplier** reported is this divided by the no-speculation `perUserTokS`. Speculative decoding helps most at **low concurrency**: as concurrent users grow, KV-cache reads dominate both the draft's and the target's step time, so the gain shrinks toward whatever the weight-only ratio between the two models allows.
+- With speculation off, none of the above numbers change anything else on the page.
 
 ## Where the model data comes from
 

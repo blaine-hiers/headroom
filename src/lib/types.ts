@@ -98,6 +98,56 @@ export interface TensorParallelCheck {
   kvReplicationFactor: number;
 }
 
+export type DraftMode = 'none' | 'preset' | 'custom';
+
+/**
+ * Speculative decoding: a small draft model proposes k tokens per step, the target model
+ * verifies them in one pass, and accepted tokens are kept. 'none' is n-gram / prompt-lookup
+ * drafting (no model, no memory, no per-step compute cost).
+ */
+export interface SpeculativeConfig {
+  enabled: boolean;
+  draftMode: DraftMode;
+  /** draftMode 'preset': the draft's own ModelSpec, so its KV cache can be estimated exactly. */
+  draftModel?: ModelSpec;
+  /** draftMode 'custom': parameter count only. KV cache is not estimated (architecture unknown). */
+  draftParams?: number;
+  draftWeightQuant: WeightQuantKey;
+  /** Draft tokens proposed per verify step. */
+  k: number;
+  /** Expected per-token acceptance probability (workload-dependent). */
+  alpha: number;
+}
+
+export interface SpeculativeMemory {
+  /** Draft weights resident in VRAM (all params, at draftWeightQuant). 0 when disabled or draftMode 'none'. */
+  weightBytes: number;
+  /** Draft weights read per decode step (handles MoE active params for preset drafts). */
+  activeWeightBytes: number;
+  /** Draft KV cache for one request at the target's context; 0 unless draftMode 'preset'. */
+  kvBytesPerRequest: number;
+  kvBytesAllUsers: number;
+  totalBytes: number;
+}
+
+export interface SpeculativeThroughput {
+  /** (1 − α^(k+1)) / (1 − α); the removable α = 1 singularity resolves to k + 1. */
+  expectedTokensPerStep: number;
+  targetStepSeconds: number;
+  draftStepSeconds: number;
+  verifyStepSeconds: number;
+  perUserTokS: number;
+  aggregateTokS: number;
+  /** perUserTokS vs the no-speculation baseline; 1 when disabled. */
+  multiplier: number;
+}
+
+export interface SpeculativeResult {
+  enabled: boolean;
+  memory: SpeculativeMemory;
+  throughput: SpeculativeThroughput;
+}
+
 export type WeightQuantKey =
   | 'fp32'
   | 'bf16'
@@ -146,6 +196,8 @@ export interface CalcState {
   quant: Quant;
   hardware: HardwareSpec;
   workload: Workload;
+  /** Optional so existing states/URLs decode unchanged; treated as disabled when absent. */
+  speculative?: SpeculativeConfig;
 }
 
 /** Everything the results column needs; all sizes in bytes. */
@@ -169,4 +221,6 @@ export interface CalcResult {
   throughput: { perUserTokS: number; aggregateTokS: number; efficiency: number };
   /** Tensor-parallel split check for hardware.gpuCount (see tensorParallel.ts). */
   tensorParallel: TensorParallelCheck;
+  /** Speculative-decoding memory and speedup estimate (see speculative.ts). enabled: false when off/absent. */
+  speculative: SpeculativeResult;
 }

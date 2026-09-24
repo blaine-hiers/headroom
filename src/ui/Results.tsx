@@ -116,6 +116,7 @@ export function Results({ state, result }: Props) {
           <Bytes value={result.totalBytes} stacked />
           <p className="muted">
             of <Bytes value={result.usableBytes} /> usable
+            {result.speculative.enabled && result.speculative.memory.totalBytes > 0 && ' (includes the draft model)'}
           </p>
         </div>
       </div>
@@ -190,6 +191,33 @@ export function Results({ state, result }: Props) {
           {hardware.gpuCount > 1 && ' (includes an estimated tensor-parallel communication penalty; see Show the math)'}
         </p>
       </div>
+
+      {result.speculative.enabled && (
+        <div className="card">
+          <h3>Decode throughput (speculative)</h3>
+          <div className="tput">
+            <div>
+              <p className="big num">{tokS(result.speculative.throughput.perUserTokS)}</p>
+              <p className="muted">tok/s per user</p>
+            </div>
+            <div>
+              <p className="big num">{tokS(result.speculative.throughput.aggregateTokS)}</p>
+              <p className="muted">tok/s aggregate</p>
+            </div>
+          </div>
+          <p className="help">
+            ×{formatNumber(result.speculative.throughput.multiplier, 2)} vs no speculation ·{' '}
+            {formatNumber(result.speculative.throughput.expectedTokensPerStep, 2)} expected tokens/verify step. Helps most at low
+            concurrency — KV-cache reads dominate both models' steps as concurrent users grow, shrinking the gain.
+          </p>
+          {result.speculative.memory.totalBytes > 0 && (
+            <p className="muted">
+              Draft model adds <Bytes value={result.speculative.memory.totalBytes} /> to VRAM (
+              <Bytes value={result.speculative.memory.weightBytes} /> weights + <Bytes value={result.speculative.memory.kvBytesAllUsers} /> KV).
+            </p>
+          )}
+        </div>
+      )}
 
       <Chart result={result} users={N} />
       <ShowTheMath state={state} result={result} />

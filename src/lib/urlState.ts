@@ -1,11 +1,15 @@
+import { findModelPreset } from './presets/models';
 import { KV_QUANTS, WEIGHT_QUANTS } from './quant';
+import { DEFAULT_DRAFT_ALPHA, DEFAULT_DRAFT_K } from './speculative';
 import type {
   Attention,
   CalcState,
+  DraftMode,
   FfnSpec,
   KvQuantKey,
   ModelSpec,
   NativeDtype,
+  SpeculativeConfig,
   WeightQuantKey,
 } from './types';
 
@@ -42,6 +46,13 @@ const K = {
   appleWiredLimitGB: 'awl',
   contextTokens: 'c',
   concurrentUsers: 'u',
+  specEnabled: 'se',
+  specDraftMode: 'sm',
+  specDraftId: 'sd',
+  specDraftParams: 'sp',
+  specDraftQuant: 'sq',
+  specK: 'sk',
+  specAlpha: 'sa',
 } as const;
 
 const ATTENTIONS: readonly Attention[] = ['mha_gqa', 'mla'];
@@ -86,6 +97,16 @@ export function encodeState(state: CalcState): string {
   set(K.appleWiredLimitGB, h.appleWiredLimitGB);
   set(K.contextTokens, state.workload.contextTokens);
   set(K.concurrentUsers, state.workload.concurrentUsers);
+  const sp = state.speculative;
+  if (sp) {
+    set(K.specEnabled, sp.enabled ? 1 : 0);
+    set(K.specDraftMode, sp.draftMode);
+    if (sp.draftMode === 'preset' && sp.draftModel) set(K.specDraftId, sp.draftModel.id);
+    if (sp.draftMode === 'custom' && sp.draftParams !== undefined) set(K.specDraftParams, sp.draftParams);
+    set(K.specDraftQuant, sp.draftWeightQuant);
+    set(K.specK, sp.k);
+    set(K.specAlpha, sp.alpha);
+  }
   return q.toString();
 }
 
@@ -180,7 +201,7 @@ export function decodeState(qs: string, fallback: CalcState): CalcState {
     const ffnRaw = q.get(K.ffn);
     if (ffnRaw !== null) model.ffn = decodeFfn(ffnRaw);
 
-    return {
+    const result: CalcState = {
       model,
       quant: {
         weight: oneOf(q.get(K.weightQuant), Object.keys(WEIGHT_QUANTS) as WeightQuantKey[]),
@@ -204,6 +225,32 @@ export function decodeState(qs: string, fallback: CalcState): CalcState {
         concurrentUsers: num(K.concurrentUsers),
       },
     };
+
+    // Speculative decoding: entirely optional, so an old link without these keys decodes
+    // unchanged (result.speculative stays absent, same as before this feature existed).
+    const specEnabledRaw = q.get(K.specEnabled);
+    if (specEnabledRaw !== null) {
+      const draftModeRaw = q.get(K.specDraftMode);
+      const draftId = q.get(K.specDraftId);
+      const draftModel = draftModeRaw === 'preset' && draftId !== null ? findModelPreset(draftId) : undefined;
+      const draftMode: DraftMode = draftModel ? 'preset' : draftModeRaw === 'custom' ? 'custom' : 'none';
+      const quantRaw = q.get(K.specDraftQuant);
+      const draftWeightQuant: WeightQuantKey =
+        quantRaw !== null && quantRaw in WEIGHT_QUANTS ? (quantRaw as WeightQuantKey) : 'q4_k_m';
+      const speculative: SpeculativeConfig = {
+        enabled: specEnabledRaw === '1',
+        draftMode,
+        draftWeightQuant,
+        k: optNum(K.specK) ?? DEFAULT_DRAFT_K,
+        alpha: optNum(K.specAlpha) ?? DEFAULT_DRAFT_ALPHA,
+      };
+      if (draftModel) speculative.draftModel = draftModel;
+      const draftParams = optNum(K.specDraftParams);
+      if (draftMode === 'custom' && draftParams !== undefined) speculative.draftParams = draftParams;
+      result.speculative = speculative;
+    }
+
+    return result;
   } catch {
     return fallback;
   }

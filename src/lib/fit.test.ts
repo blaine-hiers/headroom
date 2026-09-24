@@ -280,3 +280,43 @@ describe('calculate', () => {
     expect(calculate(state({ model: moe })).weightBytes).toBe(60e9); // all experts resident
   });
 });
+
+describe('speculative decoding', () => {
+  it('with speculation off, every number is bit-identical to a state with no speculative field at all', () => {
+    const withoutField = calculate(state());
+    const withDisabled = calculate(state({ speculative: { enabled: false, draftMode: 'none', draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 } }));
+    expect(withDisabled).toEqual(withoutField);
+    expect(withoutField.speculative).toEqual({
+      enabled: false,
+      memory: { weightBytes: 0, activeWeightBytes: 0, kvBytesPerRequest: 0, kvBytesAllUsers: 0, totalBytes: 0 },
+      throughput: {
+        expectedTokensPerStep: 1,
+        targetStepSeconds: 1 / withoutField.throughput.perUserTokS,
+        draftStepSeconds: 0,
+        verifyStepSeconds: 1 / withoutField.throughput.perUserTokS,
+        perUserTokS: withoutField.throughput.perUserTokS,
+        aggregateTokS: withoutField.throughput.aggregateTokS,
+        multiplier: 1,
+      },
+    });
+  });
+
+  it('a preset draft model adds its weights and KV cache to totalBytes and fits', () => {
+    const draft = findModelPreset('meta-llama/Llama-3.1-8B-Instruct');
+    if (!draft) throw new Error('missing preset');
+    const off = calculate(state());
+    const on = calculate(
+      state({ speculative: { enabled: true, draftMode: 'preset', draftModel: draft, draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 } }),
+    );
+    expect(on.totalBytes).toBeGreaterThan(off.totalBytes);
+    expect(on.speculative.memory.totalBytes).toBeCloseTo(on.totalBytes - off.totalBytes, 0);
+    expect(on.usableBytes).toBe(off.usableBytes);
+  });
+
+  it("draftMode 'none' (n-gram) costs no memory even when enabled", () => {
+    const on = calculate(state({ speculative: { enabled: true, draftMode: 'none', draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 } }));
+    const off = calculate(state());
+    expect(on.totalBytes).toBe(off.totalBytes);
+    expect(on.speculative.throughput.multiplier).toBeGreaterThan(1); // still speeds up decode
+  });
+});

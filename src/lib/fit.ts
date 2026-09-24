@@ -1,4 +1,5 @@
 import { kvBytesForContext, kvBytesPerToken } from './kvcache';
+import { DISABLED_SPECULATIVE, speculativeMemory, speculativeThroughput } from './speculative';
 import { checkTensorParallelSplit, tensorParallelEfficiency } from './tensorParallel';
 import { DECODE_EFFICIENCY, decodeThroughput } from './throughput';
 import type { CalcResult, CalcState, HardwareSpec } from './types';
@@ -83,8 +84,13 @@ export function calculate(state: CalcState): CalcResult {
   const weights = weightBytes(model.params, quant.weight);
   const overhead = overheadBytes(hardware);
   const usable = usableBytes(hardware);
-  const fixed = weights + overhead;
-  const total = fixed + allUsers;
+
+  // Speculative decoding (off by default): the draft model's weights and its own KV cache,
+  // at the same context and user count, are added to the fit calculation like any other cost.
+  const spec = state.speculative ?? DISABLED_SPECULATIVE;
+  const draftMemory = speculativeMemory(spec, ctx, users, quant.kv);
+  const fixed = weights + overhead + draftMemory.weightBytes;
+  const total = fixed + allUsers + draftMemory.kvBytesAllUsers;
 
   const contexts = new Set<number>(TABLE_CONTEXTS);
   contexts.add(ctx);
@@ -109,6 +115,15 @@ export function calculate(state: CalcState): CalcResult {
     efficiency: DECODE_EFFICIENCY * tensorParallelEfficiency(hardware.gpuCount),
   });
 
+  // Draft steps reuse the target's own bandwidth/efficiency model (same GPUs serve both).
+  const draftThroughput = speculativeThroughput(
+    spec,
+    { perUserTokS: throughput.perUserTokS, efficiency: throughput.efficiency },
+    { activeWeightBytes: draftMemory.activeWeightBytes, kvBytesPerRequest: draftMemory.kvBytesPerRequest },
+    users,
+    { bandwidthGBs: hardware.bandwidthGBs, gpuCount: hardware.gpuCount },
+  );
+
   return {
     kvBytesPerToken: perToken,
     kvBytesPerRequest: perRequest,
@@ -126,5 +141,6 @@ export function calculate(state: CalcState): CalcResult {
     contextTable,
     throughput,
     tensorParallel,
+    speculative: { enabled: spec.enabled, memory: draftMemory, throughput: draftThroughput },
   };
 }

@@ -189,6 +189,36 @@ export function ShowTheMath({ state, result }: Props) {
           }
           result={`${n(result.throughput.perUserTokS, 1)} tok/s per user, ${n(result.throughput.aggregateTokS, 1)} tok/s aggregate`}
         />
+        {result.speculative.enabled && state.speculative && (
+          <>
+            {result.speculative.memory.totalBytes > 0 && (
+              <Step
+                title="Draft model memory"
+                formula="draftWeightBytes + N × draftKvBytesPerRequest"
+                sub={`${n(result.speculative.memory.weightBytes)} + ${n(N)} × ${n(result.speculative.memory.kvBytesPerRequest)}`}
+                result={B(result.speculative.memory.totalBytes)}
+              />
+            )}
+            <Step
+              title="Expected tokens per verify step"
+              formula="(1 − α^(k+1)) / (1 − α), limit k+1 at α = 1"
+              sub={`α = ${n(state.speculative.alpha, 2)}, k = ${n(state.speculative.k)}`}
+              result={n(result.speculative.throughput.expectedTokensPerStep, 3)}
+            />
+            <Step
+              title="Verify step time"
+              formula="targetStepSeconds + k × draftStepSeconds"
+              sub={`${n(result.speculative.throughput.targetStepSeconds * 1000, 3)} ms + ${n(state.speculative.k)} × ${n(result.speculative.throughput.draftStepSeconds * 1000, 3)} ms`}
+              result={`${n(result.speculative.throughput.verifyStepSeconds * 1000, 3)} ms`}
+            />
+            <Step
+              title="Speculative decode throughput"
+              formula="expectedTokensPerStep / verifyStepSeconds"
+              sub={`${n(result.speculative.throughput.expectedTokensPerStep, 3)} / ${n(result.speculative.throughput.verifyStepSeconds, 6)} s`}
+              result={`${n(result.speculative.throughput.perUserTokS, 1)} tok/s per user (×${n(result.speculative.throughput.multiplier, 2)} vs no speculation)`}
+            />
+          </>
+        )}
       </ol>
       {hw.gpuCount > 1 && (
         <p className="help">Multi-GPU numbers assume tensor-parallel bandwidth pooling and ignore all-reduce communication cost beyond this penalty.</p>
