@@ -300,4 +300,19 @@ describe('App', () => {
     // Verify no fetch calls were made (model was loaded from localStorage)
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('clicking a fit-matrix cell applies that quant and context to the calculator', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByText('Fit matrix: weight quant × context'));
+
+    // Default model is the Llama 3.3 70B preset (BF16, 8192 tokens chosen).
+    expect(screen.getByLabelText('Weights')).toHaveValue('bf16');
+    expect(screen.getByLabelText('Context tokens')).toHaveValue(8192);
+
+    await user.click(screen.getByRole('button', { name: /^FP8 at 2K:/ }));
+
+    expect(screen.getByLabelText('Weights')).toHaveValue('fp8');
+    expect(screen.getByLabelText('Context tokens')).toHaveValue(2048);
+  });
 });

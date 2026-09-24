@@ -4,6 +4,7 @@ export * from './kvcache';
 export * from './weights';
 export * from './fit';
 export * from './cost';
+export * from './fitMatrix';
 export * from './prefill';
 export * from './throughput';
 export * from './offload';

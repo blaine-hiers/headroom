@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer } from 'react';
 import { calculate, DISABLED_SPECULATIVE, encodeState } from '../lib';
-import type { CalcState } from '../lib';
+import type { CalcState, WeightQuantKey } from '../lib';
 import { HardwarePanel } from './HardwarePanel';
 import { Header } from './Header';
 import { ModelPanel } from './ModelPanel';
@@ -38,6 +38,11 @@ export default function App() {
     return `${window.location.origin}${urlFor(state)}`;
   }, [state]);
 
+  const applyFit = useCallback((weight: WeightQuantKey, contextTokens: number) => {
+    dispatch({ type: 'quant', patch: { weight } });
+    dispatch({ type: 'workload', patch: { contextTokens } });
+  }, []);
+
   return (
     <div className="app">
       <Header getLink={getLink} />
@@ -65,7 +70,7 @@ export default function App() {
             onChange={(patch) => dispatch({ type: 'speculative', patch })}
           />
         </div>
-        <Results state={state} result={result} />
+        <Results state={state} result={result} onApplyFit={applyFit} />
       </main>
       <footer className="footer muted">
         Model data from the Hugging Face Hub (config.json + safetensors parameter count, repo file sizes, GGUF headers) or built-in presets.
