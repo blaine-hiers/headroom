@@ -3,6 +3,7 @@ export * from './quant';
 export * from './kvcache';
 export * from './weights';
 export * from './fit';
+export * from './cost';
 export * from './prefill';
 export * from './throughput';
 export * from './tensorParallel';

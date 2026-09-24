@@ -20,7 +20,10 @@ describe('urlState', () => {
       const s: CalcState = {
         model,
         quant: { weight: 'q4_k_m', kv: 'fp8' },
-        hardware: { gpuName: 'H100 SXM', gpuCount: 8, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 7.5, overheadGB: 1.25 },
+        // H100 SXM has a preset usdPerHour, so it must be set here too: without a "up" param
+        // of its own, decodeState falls back to the named preset's price (issue #16), and an
+        // omitted field would otherwise fail to round-trip exactly.
+        hardware: { gpuName: 'H100 SXM', gpuCount: 8, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 7.5, overheadGB: 1.25, usdPerHour: findGpuPreset('H100 SXM')?.usdPerHour },
         workload: { contextTokens: 32768, concurrentUsers: 16 },
         runtime: 'vllm',
       };
@@ -94,6 +97,47 @@ describe('urlState', () => {
     // The awl param is preserved in the URL state, but effectiveVramGB will ignore it for non-Apple GPUs
     // (In the UI, HardwarePanel clears it when switching GPU selection)
     expect(decoded.hardware.appleWiredLimitGB).toBe(120);
+  });
+
+  it('round-trips a cloud cost price', () => {
+    const s: CalcState = {
+      ...fallback,
+      hardware: { gpuName: 'H100 SXM', gpuCount: 1, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 5, overheadGB: 1, usdPerHour: 3.25 },
+    };
+    const qs = encodeState(s);
+    expect(qs).toContain('up=3.25');
+    expect(decodeState(qs, fallback)).toEqual(s);
+  });
+
+  it('omits the cloud cost price when undefined and the GPU has no listed price', () => {
+    // RTX 4090 is a consumer card with no usdPerHour preset value, so there is nothing to
+    // distinguish "cleared" from "never had a price" — no key, and no fallback needed either.
+    const qs = encodeState(fallback);
+    expect(qs).not.toContain('up=');
+    expect(decodeState(qs, fallback)).toEqual(fallback);
+    expect(decodeState(qs, fallback).hardware.usdPerHour).toBeUndefined();
+  });
+
+  it('a cleared price on a priced preset writes an explicit sentinel, and stays cleared on reload/share', () => {
+    // H100 SXM has a preset price; hardware.usdPerHour undefined here means the user blanked
+    // out the pre-filled field. Without a sentinel this would be indistinguishable from an old
+    // link that never had the "up" key, and the price would silently reappear on reload.
+    const s: CalcState = { ...fallback, hardware: { ...fallback.hardware, gpuName: 'H100 SXM', usdPerHour: undefined } };
+    const qs = encodeState(s);
+    expect(qs).toContain('up=&'); // present, empty — not absent
+    const decoded = decodeState(qs, fallback);
+    expect(decoded.hardware.usdPerHour).toBeUndefined();
+    expect(decoded).toEqual(s);
+  });
+
+  it('an old link without usdPerHour at all (issue #16) falls back to the named GPU preset price', () => {
+    const s: CalcState = { ...fallback, hardware: { ...fallback.hardware, gpuName: 'H100 SXM' } };
+    // Simulates a link saved before this feature existed: no "up" key present at all, as
+    // opposed to the present-but-empty sentinel a deliberately cleared price writes.
+    const qs = encodeState(s).replace(/&?up=[^&]*/, '');
+    expect(qs).not.toContain('up=');
+    const decoded = decodeState(qs, fallback);
+    expect(decoded.hardware.usdPerHour).toBe(findGpuPreset('H100 SXM')?.usdPerHour);
   });
 
   it('an old link without tflopsBf16 (issue #11) still decodes, from the named GPU preset', () => {

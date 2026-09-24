@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CUSTOM_GPU_NAME, encodeState, findModelPreset } from '../lib';
+import { CUSTOM_GPU_NAME, encodeState, findGpuPreset, findModelPreset } from '../lib';
 import type { CalcState } from '../lib';
 import { calculate } from '../lib';
 import { clampModel, defaultState, initialState, MAX_DIM, MAX_FILE_BYTES, reducer } from './state';
@@ -68,6 +68,35 @@ describe('reducer: warnings follow Advanced edits', () => {
     expect(fp8.model.warnings).toContain('native FP8 weights: FP8 pre-selected; BF16 would double the weight size');
     const back = reducer(fp8, { type: 'editModel', patch: { nativeDtype: 'bf16' } });
     expect(back.model.warnings.some((w) => w.includes('FP8'))).toBe(false);
+  });
+});
+
+describe('reducer: hardware cloud cost', () => {
+  it('switching to a GPU preset pre-fills its cloud cost', () => {
+    const s = reducer(defaultState, { type: 'hardware', patch: { gpuName: 'H100 SXM' } });
+    expect(s.hardware.usdPerHour).toBe(findGpuPreset('H100 SXM')?.usdPerHour);
+  });
+
+  it('switching to a preset with no listed price clears any previous one', () => {
+    const withPrice = reducer(defaultState, { type: 'hardware', patch: { gpuName: 'H100 SXM' } });
+    const s = reducer(withPrice, { type: 'hardware', patch: { gpuName: 'RTX 4090' } });
+    expect(s.hardware.usdPerHour).toBeUndefined();
+  });
+
+  it('an edited price is kept until the GPU preset changes', () => {
+    const s = reducer(defaultState, { type: 'hardware', patch: { usdPerHour: 1.23 } });
+    expect(s.hardware.usdPerHour).toBe(1.23);
+  });
+});
+
+describe('initialState: a cleared cloud cost price stays cleared', () => {
+  it('does not get clamped back up to the 0.01 minimum on reload', () => {
+    // H100 SXM has a preset price; usdPerHour: undefined here is a deliberate clear, which
+    // urlState.ts encodes as an explicit sentinel (not an absent key). initialState's clamp
+    // only touches a defined usdPerHour, so the cleared value must stay undefined, not 0.01.
+    const s = { ...defaultState, hardware: { ...defaultState.hardware, gpuName: 'H100 SXM', usdPerHour: undefined } };
+    const decoded = initialState(`?${encodeState(s)}`);
+    expect(decoded.hardware.usdPerHour).toBeUndefined();
   });
 });
 

@@ -3,6 +3,7 @@ import type { ActiveParamsMethod, CalcResult, CalcState } from '../lib';
 import { Bytes } from './Bytes';
 import { Chart } from './Chart';
 import { LaunchCommand } from './LaunchCommand';
+import { CostCard } from './CostCard';
 import { ShowTheMath } from './ShowTheMath';
 import { fitLevel } from './state';
 
@@ -207,6 +208,7 @@ export function Results({ state, result }: Props) {
         </p>
       </div>
 
+      <CostCard hardware={hardware} result={result} concurrentUsers={N} />
       <Chart result={result} users={N} />
       <LaunchCommand state={state} />
       <ShowTheMath state={state} result={result} />
