@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { makeSpec } from './__fixtures__/makeSpec';
 import { findGpuPreset } from './presets/gpus';
+import { DEFAULT_OFFLOAD } from './offload';
 import { MODEL_PRESETS } from './presets/models';
 import type { CalcState } from './types';
 import { decodeState, encodeState } from './urlState';
@@ -172,6 +173,29 @@ describe('urlState', () => {
     const decoded = decodeState(qs, fallback);
     expect(decoded.runtime).toBe('generic');
     expect(decoded).toEqual({ ...fallback, runtime: 'generic' });
+  });
+
+  it('round-trips the offload spec (#7)', () => {
+    const s: CalcState = {
+      ...fallback,
+      hardware: { ...fallback.hardware, offload: { enabled: true, systemRamGB: 64, ramBandwidthGBs: 90 } },
+    };
+    expect(decodeState(encodeState(s), fallback)).toEqual(s);
+  });
+
+  it('an old link with no offload keys decodes with offload left undefined (unchanged behavior)', () => {
+    const qs = encodeState(fallback);
+    expect(qs).not.toContain('oe=');
+    const decoded = decodeState(qs, fallback);
+    expect(decoded.hardware.offload).toBeUndefined();
+  });
+
+  it('omits offload keys for a fresh/default state, even when the field is explicitly set (#7)', () => {
+    const s: CalcState = { ...fallback, hardware: { ...fallback.hardware, offload: { ...DEFAULT_OFFLOAD } } };
+    const qs = encodeState(s);
+    expect(qs).not.toContain('oe=');
+    expect(qs).not.toContain('oram=');
+    expect(qs).not.toContain('obw=');
   });
 
   it('bad input → fallback', () => {

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import {
   attentionParamsPerLayer,
   calculateCloudCost,
+  DECODE_EFFICIENCY,
   effectiveSlidingLayers,
   effectiveVramGB,
   findGpuPreset,
@@ -14,6 +15,8 @@ import {
   llamaCppPerSlotContext,
   RUNTIME_PROFILES,
   SGLANG_MEM_FRACTION_STATIC,
+  resolveOffload,
+  splitByLayerFraction,
   TP_PENALTY_PER_DOUBLING,
   VLLM_GPU_MEMORY_UTILIZATION,
   VLLM_KV_BLOCK_TOKENS,
@@ -124,6 +127,10 @@ export function ShowTheMath({ state, result }: Props) {
     aggregateTokS: result.throughput.aggregateTokS,
     maxUsersAtContext: maxU,
   });
+  const offload = resolveOffload(hw.offload);
+  const offloadPlan = result.offload;
+  const activeSplit = splitByLayerFraction(activeBytes, offloadPlan.gpuLayers, model.numLayers);
+  const gpuAvailable = result.usableBytes - result.overheadBytes - result.kvBytesAllUsers;
 
   return (
     <details className="card math">
@@ -297,10 +304,60 @@ export function ShowTheMath({ state, result }: Props) {
           sub={`[2 × ${n(active)} × ${n(C)} + 2 × ${n(model.numLayers)} × ${n(C)}² × queryWidth] / (${n(hw.tflopsBf16, 1)} × 1e12 × ${n(hw.gpuCount)} × ${result.prefill.mfu})`}
           result={`${n(result.prefill.flops)} FLOPs → ${formatSeconds(result.prefill.ttftSeconds)}`}
         />
+        {offload.enabled && (
+          <>
+            <Step
+              title="Offload: bytes per layer"
+              formula="weights / numLayers"
+              sub={`${n(result.weightBytes)} / ${n(model.numLayers)}`}
+              result={B(offloadPlan.bytesPerLayer)}
+            />
+            <Step
+              title="Offload: GPU bytes available for weights"
+              formula="usable − overhead − KV for all users"
+              sub={`${n(result.usableBytes)} − ${n(result.overheadBytes)} − ${n(result.kvBytesAllUsers)}`}
+              result={B(Math.max(0, gpuAvailable))}
+            />
+            <Step
+              title="Offload: layers on GPU (-ngl)"
+              formula="clamp(floor(available / bytesPerLayer), 0, numLayers)"
+              sub={`floor(${n(gpuAvailable)} / ${n(offloadPlan.bytesPerLayer)})`}
+              result={`${n(offloadPlan.gpuLayers)} of ${n(model.numLayers)} on GPU, ${n(offloadPlan.cpuLayers)} in RAM`}
+            />
+            <Step
+              title="Offload: does the split actually run?"
+              formula="(available ≥ 0) and (cpuWeightBytes ≤ systemRamGB × 1e9)"
+              sub={
+                <>
+                  ({n(gpuAvailable)} ≥ 0) and ({n(offloadPlan.cpuWeightBytes)} ≤ {n(offload.systemRamGB)} × 1e9)
+                </>
+              }
+              result={
+                offloadPlan.fitsInRam
+                  ? 'yes'
+                  : gpuAvailable < 0
+                    ? 'no — KV + overhead alone exceed usable VRAM; no amount of RAM fixes that'
+                    : 'no — the RAM-resident layers do not fit in system RAM'
+              }
+            />
+            <Step
+              title="Offload: decode throughput"
+              formula="1 / ((gpuActive + N×KV) / gpuBandwidth + cpuActive / ramBandwidth)"
+              sub={
+                <>
+                  1 / (({n(activeSplit.gpu)} + {n(N)} × {n(result.kvBytesPerRequest)}) / ({n(hw.bandwidthGBs)} × 1e9 ×{' '}
+                  {n(hw.gpuCount)} × {n(result.throughput.efficiency, 3)}) + {n(activeSplit.cpu)} / ({n(offload.ramBandwidthGBs)} × 1e9 × {n(DECODE_EFFICIENCY, 2)}))
+                </>
+              }
+              result={`${n(result.throughput.perUserTokS, 1)} tok/s per user, ${n(result.throughput.aggregateTokS, 1)} tok/s aggregate`}
+            />
+          </>
+        )}
       </ol>
       {hw.gpuCount > 1 && (
         <p className="help">Multi-GPU numbers assume tensor-parallel bandwidth pooling and ignore all-reduce communication cost beyond this penalty.</p>
       )}
+      {offload.enabled && <p className="help">KV cache always stays on the GPU (llama.cpp's default) — only weights are split between GPU and RAM.</p>}
     </details>
   );
 }

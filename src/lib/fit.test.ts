@@ -390,3 +390,102 @@ describe('runtime profiles: MLX builds on the Apple wired-memory limit, not a du
     expect(effectiveVramGB(apple.gpuName, apple.vramGB)).toBeLessThan(apple.vramGB); // wired limit applied
   });
 });
+
+describe('CPU/RAM offload (#7)', () => {
+  it('offload off (no offload field): every number matches a pre-offload calculation bit-for-bit', () => {
+    const model = makeSpec({ params: 200e9 }); // too big for a single 24 GB GPU, on purpose
+    const rtx4090: HardwareSpec = { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, tflopsBf16: 100, reservePct: 5, overheadGB: 1 };
+    const withoutField = calculate(state({ model, hardware: rtx4090 }));
+    const withDisabled = calculate(
+      state({ model, hardware: { ...rtx4090, offload: { enabled: false, systemRamGB: 64, ramBandwidthGBs: 50 } } }),
+    );
+    expect(withDisabled.fits).toBe(withoutField.fits);
+    expect(withDisabled.headroomBytes).toBe(withoutField.headroomBytes);
+    expect(withDisabled.totalBytes).toBe(withoutField.totalBytes);
+    expect(withDisabled.throughput).toEqual(withoutField.throughput);
+    expect(withDisabled.throughput.perUserTokS).toBe(withoutField.throughput.perUserTokS);
+    expect(withDisabled.maxUsersAtContext).toBe(withoutField.maxUsersAtContext);
+    expect(withDisabled.maxContextForUsers).toBe(withoutField.maxContextForUsers);
+    expect(withDisabled.contextTable).toEqual(withoutField.contextTable);
+    // The offload plan is a no-op split (everything on the GPU) when disabled.
+    expect(withoutField.offload.gpuLayers).toBe(model.numLayers);
+    expect(withoutField.offload.cpuLayers).toBe(0);
+    // fixedBytes/bytesPerUser (shared with the chart and other panels) must equal the un-split
+    // weights+overhead and KV-per-request exactly when offload is off — bit-identical, not just close.
+    expect(withoutField.fixedBytes).toBe(withoutField.weightBytes + withoutField.overheadBytes);
+    expect(withoutField.bytesPerUser).toBe(withoutField.kvBytesPerRequest);
+    expect(withDisabled.fixedBytes).toBe(withoutField.fixedBytes);
+    expect(withDisabled.bytesPerUser).toBe(withoutField.bytesPerUser);
+  });
+
+  it('offload on: a 70B Q4 model that does not fit on one 24 GB GPU offloads layers to RAM and still reports a throughput', () => {
+    const model = makeSpec(); // Llama 3 70B defaults
+    const rtx4090: HardwareSpec = {
+      gpuName: 'RTX 4090',
+      gpuCount: 1,
+      vramGB: 24,
+      bandwidthGBs: 1008, tflopsBf16: 100,
+      reservePct: 5,
+      overheadGB: 1,
+      offload: { enabled: true, systemRamGB: 64, ramBandwidthGBs: 50 },
+    };
+    const r = calculate(
+      state({ model, quant: { weight: 'q4_k_m', kv: 'fp16' }, hardware: rtx4090, workload: { contextTokens: 2048, concurrentUsers: 1 } }),
+    );
+    expect(r.offload.cpuLayers).toBeGreaterThan(0);
+    expect(r.offload.gpuLayers).toBeLessThan(model.numLayers);
+    expect(r.offload.fitsInRam).toBe(true);
+    expect(r.throughput.perUserTokS).toBeGreaterThan(0);
+    // Weights alone (~42.8 GB at Q4_K_M) still don't fit the GPU's ~21.8 GB usable on their own, offload or not.
+    expect(r.fits).toBe(false);
+    // The issue's own worked example: -ngl 39/80 at ~1.52 tok/s.
+    expect(r.offload.gpuLayers).toBe(39);
+    expect(r.offload.cpuLayers).toBe(41);
+    expect(r.throughput.perUserTokS).toBeCloseTo(1.52, 2);
+    // Capacity math must agree with the "Offloaded" badge, not the un-split "does not fit":
+    // the GPU-resident weights (not the full 42.8 GB) are what's fixed once offload is on.
+    expect(r.maxUsersAtContext).toBeGreaterThanOrEqual(1);
+    expect(r.fixedBytes).toBe(r.offload.gpuWeightBytes + r.overheadBytes);
+    expect(r.bytesPerUser).toBe(r.kvBytesPerRequest);
+    // What Chart.tsx plots for "current users" must actually clear usable VRAM (a green marker),
+    // matching the Offloaded (not does-not-fit) badge.
+    expect(r.fixedBytes + r.bytesPerUser * 1).toBeLessThanOrEqual(r.usableBytes);
+  });
+
+  it('offload on: does not fit even with RAM when system RAM is too small', () => {
+    const model = makeSpec();
+    const rtx4090: HardwareSpec = {
+      gpuName: 'RTX 4090',
+      gpuCount: 1,
+      vramGB: 24,
+      bandwidthGBs: 1008, tflopsBf16: 100,
+      reservePct: 5,
+      overheadGB: 1,
+      offload: { enabled: true, systemRamGB: 1, ramBandwidthGBs: 50 },
+    };
+    const r = calculate(state({ model, hardware: rtx4090, workload: { contextTokens: 2048, concurrentUsers: 1 } }));
+    expect(r.offload.cpuLayers).toBeGreaterThan(0);
+    expect(r.offload.fitsInRam).toBe(false);
+  });
+
+  it('offload on: KV + overhead alone exceed usable VRAM -> does not fit, even with unlimited system RAM', () => {
+    // 1x RTX 4090, 8 users at 32K: KV for all users alone is already far more than usable VRAM.
+    const model = makeSpec();
+    const rtx4090: HardwareSpec = {
+      gpuName: 'RTX 4090',
+      gpuCount: 1,
+      vramGB: 24,
+      bandwidthGBs: 1008, tflopsBf16: 100,
+      reservePct: 5,
+      overheadGB: 1,
+      offload: { enabled: true, systemRamGB: 1_000_000, ramBandwidthGBs: 50 },
+    };
+    const r = calculate(state({ model, hardware: rtx4090, workload: { contextTokens: 32768, concurrentUsers: 8 } }));
+    expect(r.offload.cpuLayers).toBeGreaterThan(0);
+    // Even with unlimited RAM, the GPU alone can't hold its own KV cache and overhead.
+    expect(r.offload.fitsInRam).toBe(false);
+    // A configuration that doesn't actually run must not present a throughput as achievable.
+    expect(r.throughput.perUserTokS).toBe(0);
+    expect(r.throughput.aggregateTokS).toBe(0);
+  });
+});

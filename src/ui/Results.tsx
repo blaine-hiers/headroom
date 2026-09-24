@@ -1,4 +1,4 @@
-import { effectiveBitsPerWeight, formatNumber, formatSeconds, formatTokens, KV_QUANTS, WEIGHT_QUANTS } from '../lib';
+import { effectiveBitsPerWeight, formatNumber, formatSeconds, formatTokens, KV_QUANTS, resolveOffload, WEIGHT_QUANTS } from '../lib';
 import type { ActiveParamsMethod, CalcResult, CalcState } from '../lib';
 import { Bytes } from './Bytes';
 import { Chart } from './Chart';
@@ -6,13 +6,14 @@ import { LaunchCommand } from './LaunchCommand';
 import { CostCard } from './CostCard';
 import { ShowTheMath } from './ShowTheMath';
 import { fitLevel } from './state';
+import type { FitLevel } from './state';
 
 interface Props {
   state: CalcState;
   result: CalcResult;
 }
 
-const BADGE_TEXT = { fits: 'Fits', tight: 'Tight', nofit: 'Does not fit' } as const;
+const BADGE_TEXT: Record<FitLevel, string> = { fits: 'Fits', tight: 'Tight', nofit: 'Does not fit', offloaded: 'Offloaded' };
 
 const METHOD_LABEL: Record<ActiveParamsMethod, string> = {
   dense: 'dense, all params',
@@ -51,8 +52,12 @@ export function Results({ state, result }: Props) {
   const { workload, quant, hardware, model } = state;
   const N = workload.concurrentUsers;
   const C = workload.contextTokens;
-  const level = fitLevel(result.fits, result.headroomBytes, result.usableBytes);
-  const fixedTooBig = result.weightBytes + result.overheadBytes > result.usableBytes;
+  const offloadEnabled = resolveOffload(hardware.offload).enabled;
+  const offloaded = offloadEnabled && result.offload.cpuLayers > 0;
+  // Offload replaces the classic fits/tight/nofit badge only once it actually moves layers to RAM.
+  const level: FitLevel = offloaded ? (result.offload.fitsInRam ? 'offloaded' : 'nofit') : fitLevel(result.fits, result.headroomBytes, result.usableBytes);
+  // fixedBytes already accounts for offload (GPU-resident weights + overhead) when it's on.
+  const fixedTooBig = result.fixedBytes > result.usableBytes;
   const tpWarnings = tensorParallelWarnings(result.tensorParallel, model.numKvHeads);
 
   return (
@@ -79,6 +84,13 @@ export function Results({ state, result }: Props) {
             · {hardware.gpuCount} × {hardware.gpuName}, {formatNumber(N)} user{N === 1 ? '' : 's'} @ {formatTokens(C)}
           </span>
         </p>
+        {offloadEnabled && (
+          <p className="verdict-detail muted">
+            <code>-ngl {formatNumber(result.offload.gpuLayers)}</code> of {formatNumber(model.numLayers)} layers on
+            GPU, {formatNumber(result.offload.cpuLayers)} in system RAM
+            {result.offload.cpuLayers > 0 && !result.offload.fitsInRam ? ' — does not fit in system RAM either' : ''}
+          </p>
+        )}
         {tpWarnings.length > 0 && (
           <ul className="warnings" aria-label="Tensor-parallel notes">
             {tpWarnings.map((w) => (
@@ -133,7 +145,13 @@ export function Results({ state, result }: Props) {
         <div className="card callout">
           <h3>Max users at {formatTokens(C)}</h3>
           <p className="big num">{users(result.maxUsersAtContext)}</p>
-          <p className="muted">{fixedTooBig ? 'weights + overhead alone exceed usable VRAM' : 'concurrent requests, each at full context'}</p>
+          <p className="muted">
+            {fixedTooBig
+              ? offloadEnabled
+                ? 'GPU-resident weights + overhead alone exceed usable VRAM'
+                : 'weights + overhead alone exceed usable VRAM'
+              : 'concurrent requests, each at full context'}
+          </p>
         </div>
         <div className="card callout">
           <h3>
@@ -201,6 +219,7 @@ export function Results({ state, result }: Props) {
         <p className="help">
           bandwidth-bound decode estimate, ×{formatNumber(result.throughput.efficiency, 3)} efficiency
           {hardware.gpuCount > 1 && ' (includes an estimated tensor-parallel communication penalty; see Show the math)'}
+          {offloaded && ' (includes the CPU/RAM-offloaded layers; see Show the math)'}
         </p>
         <p className="help">
           TTFT is a compute-bound estimate, BF16 rate, ×{result.prefill.mfu} MFU

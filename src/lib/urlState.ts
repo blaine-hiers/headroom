@@ -1,4 +1,5 @@
 import { findGpuPreset } from './presets/gpus';
+import { DEFAULT_OFFLOAD, resolveOffload } from './offload';
 import { KV_QUANTS, WEIGHT_QUANTS } from './quant';
 import { RUNTIME_KEYS } from './runtime';
 import type {
@@ -44,6 +45,9 @@ const K = {
   overheadGB: 'oh',
   appleWiredLimitGB: 'awl',
   usdPerHour: 'up',
+  offloadEnabled: 'oe',
+  systemRamGB: 'oram',
+  ramBandwidthGBs: 'obw',
   contextTokens: 'c',
   concurrentUsers: 'u',
   fileWeightBytes: 'fwb',
@@ -105,6 +109,15 @@ export function encodeState(state: CalcState): string {
     // Without it, an absent key is indistinguishable from an old link that predates the
     // feature, and decode would fall the price back in on reload/share.
     q.set(K.usdPerHour, '');
+  }
+  // Skip entirely when it's the untouched default (disabled, stock RAM figures) so a fresh
+  // load doesn't grow the URL with keys that mean nothing yet.
+  const isDefaultOffload =
+    !h.offload || (!h.offload.enabled && h.offload.systemRamGB === DEFAULT_OFFLOAD.systemRamGB && h.offload.ramBandwidthGBs === DEFAULT_OFFLOAD.ramBandwidthGBs);
+  if (h.offload && !isDefaultOffload) {
+    set(K.offloadEnabled, h.offload.enabled ? 1 : 0);
+    set(K.systemRamGB, h.offload.systemRamGB);
+    set(K.ramBandwidthGBs, h.offload.ramBandwidthGBs);
   }
   set(K.contextTokens, state.workload.contextTokens);
   set(K.concurrentUsers, state.workload.concurrentUsers);
@@ -244,6 +257,15 @@ export function decodeState(qs: string, fallback: CalcState): CalcState {
               ? undefined
               : num(K.usdPerHour);
         if (usdPerHour !== undefined) (hw as any).usdPerHour = usdPerHour;
+        // Old shared links never had these keys; resolveOffload's disabled default fills the gap.
+        if (q.has(K.offloadEnabled) || q.has(K.systemRamGB) || q.has(K.ramBandwidthGBs)) {
+          const offloadDefault = resolveOffload(undefined);
+          (hw as any).offload = {
+            enabled: q.get(K.offloadEnabled) === '1',
+            systemRamGB: optNum(K.systemRamGB) ?? offloadDefault.systemRamGB,
+            ramBandwidthGBs: optNum(K.ramBandwidthGBs) ?? offloadDefault.ramBandwidthGBs,
+          };
+        }
         return hw;
       })(),
       workload: {

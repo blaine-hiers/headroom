@@ -155,6 +155,40 @@ export interface HardwareSpec {
   appleWiredLimitGB?: number;
   /** On-demand cloud list price per GPU per hour, USD. Optional; the cost card is hidden without it. */
   usdPerHour?: number;
+  /** CPU/RAM layer offload (llama.cpp's -ngl). Optional and off by default; see offload.ts. */
+  offload?: OffloadSpec;
+}
+
+/**
+ * System-RAM offload for the model layers that don't fit in VRAM, like llama.cpp's `-ngl`.
+ * Off by default — today's fit/throughput numbers are unchanged unless `enabled` is true.
+ */
+export interface OffloadSpec {
+  enabled: boolean;
+  /** Total system RAM, GB. */
+  systemRamGB: number;
+  /** System RAM bandwidth, GB/s (e.g. ~50 DDR4 dual-channel, ~80-100 DDR5 dual-channel). */
+  ramBandwidthGBs: number;
+}
+
+/** Result of splitting a model's layers between GPU and system RAM (see offload.ts's planOffload). */
+export interface OffloadPlan {
+  /** Layers placed on the GPU — llama.cpp's -ngl value. */
+  gpuLayers: number;
+  /** Layers left to run from system RAM. */
+  cpuLayers: number;
+  /** weightBytes / numLayers — the approximation used to decide the split. */
+  bytesPerLayer: number;
+  /** Weight bytes placed on the GPU. */
+  gpuWeightBytes: number;
+  /** Weight bytes placed in system RAM. */
+  cpuWeightBytes: number;
+  /**
+   * True when the split actually works: the GPU can hold its own KV cache and overhead on their
+   * own (KV never leaves the GPU), AND cpuWeightBytes fits in systemRamGB. Always true when
+   * offload is disabled.
+   */
+  fitsInRam: boolean;
 }
 
 export interface Workload {
@@ -188,6 +222,15 @@ export interface CalcResult {
   totalBytes: number;
   headroomBytes: number; // usable - total (negative when it does not fit)
   fits: boolean;
+  /**
+   * Everything that doesn't scale with concurrent users: weights + overhead normally, or —
+   * with CPU/RAM offload on — the GPU-resident weights + overhead, since the rest already
+   * spilled to RAM. Shared by the capacity math (maxUsers/maxContext), the "fixed alone
+   * exceeds usable" check, and the chart, so they all agree with the fit/offload badge.
+   */
+  fixedBytes: number;
+  /** Everything that scales per user at the chosen context: KV bytes per request (KV always stays on the GPU). */
+  bytesPerUser: number;
   maxUsersAtContext: number;
   maxContextForUsers: number;
   /** rows for 2K / 8K / 32K / 128K plus the chosen context if different */
@@ -197,4 +240,6 @@ export interface CalcResult {
   tensorParallel: TensorParallelCheck;
   /** Prefill / time-to-first-token estimate for one user at the chosen context (compute-bound). */
   prefill: { ttftSeconds: number; flops: number; mfu: number; headsSource: 'model' | 'hiddenSize-fallback' };
+  /** CPU/RAM layer split (see offload.ts). Always present; a no-op split (all layers on GPU) when offload is disabled. */
+  offload: OffloadPlan;
 }

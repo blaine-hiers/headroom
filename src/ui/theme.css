@@ -13,6 +13,7 @@
   --faint: #5d6570;
   --accent: #6aa8ff;
   --accent-contrast: #06101f;
+  --accent-bg: rgba(106, 168, 255, 0.13);
   --ok: #3ecf7a;
   --ok-bg: rgba(62, 207, 122, 0.12);
   --warn: #f0b23d;
@@ -41,6 +42,7 @@
   --faint: #8a929d;
   --accent: #1f6fe0;
   --accent-contrast: #ffffff;
+  --accent-bg: rgba(31, 111, 224, 0.1);
   --ok: #178a4a;
   --ok-bg: rgba(23, 138, 74, 0.1);
   --warn: #a86a00;
@@ -626,6 +628,15 @@ input[type='range'] {
 .verdict-nofit .badge {
   color: var(--bad);
   background: var(--bad-bg);
+}
+
+.verdict-offloaded {
+  border-color: var(--accent);
+}
+
+.verdict-offloaded .badge {
+  color: var(--accent);
+  background: var(--accent-bg);
 }
 
 .cards {
