@@ -135,8 +135,10 @@ export function reducer(state: CalcState, action: Action): CalcState {
       const { patch } = action;
       let next = state;
       if (patch.model !== undefined) next = reducer(next, { type: 'loadModel', spec: patch.model });
-      if (patch.quant !== undefined) next = { ...next, quant: { ...next.quant, ...patch.quant } };
-      if (patch.hardware !== undefined) next = reducer(next, { type: 'hardware', patch: patch.hardware });
+      if (patch.quant !== undefined) next = { ...next, quant: { ...patch.quant } };
+      // Whole-slice replace: optional fields the patch omits (offload, appleWiredLimitGB,
+      // usdPerHour) must not survive from the previous hardware.
+      if (patch.hardware !== undefined) next = { ...next, hardware: { ...patch.hardware } };
       if (patch.workload !== undefined) next = reducer(next, { type: 'workload', patch: patch.workload });
       if (patch.runtime !== undefined) next = { ...next, runtime: patch.runtime };
       return next;

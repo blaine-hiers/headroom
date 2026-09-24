@@ -193,9 +193,24 @@ describe('reducer: loadPartial (openInCalculator handoff)', () => {
     const s = reducer(defaultState, { type: 'loadPartial', patch });
     expect(s.model.id).toBe(llama8b.id);
     expect(s.quant).toEqual(patch.quant);
-    expect(s.hardware).toMatchObject(patch.hardware);
+    expect(s.hardware).toEqual(patch.hardware);
     expect(s.workload).toEqual(patch.workload);
     expect(s.runtime).toBe('vllm');
+  });
+
+  it('drops optional hardware fields the patch omits (offload, Apple limit, price)', () => {
+    const before = {
+      ...defaultState,
+      hardware: {
+        ...defaultState.hardware,
+        offload: { enabled: true, systemRamGB: 64, ramBandwidthGBs: 50 },
+        appleWiredLimitGB: 42,
+        usdPerHour: 9.99,
+      },
+    };
+    const hardware = { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, tflopsBf16: 165, reservePct: 5, overheadGB: 1 };
+    const s = reducer(before, { type: 'loadPartial', patch: { hardware } });
+    expect(s.hardware).toEqual(hardware);
   });
 
   it('leaves every slice the patch omits exactly as it was', () => {
