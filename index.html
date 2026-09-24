@@ -9,7 +9,31 @@
       content="Headroom: will this LLM fit on my GPU? Weights, KV cache per token and per request, max concurrent users, max context, and a decode-speed estimate from a Hugging Face repo id."
     />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#111418" />
     <title>Headroom</title>
+
+    <!-- Open Graph / Twitter link preview. A static site can't render a per-state image, so this
+         is one generic card for every shared link; that's an accepted tradeoff, not a bug. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Headroom" />
+    <meta property="og:title" content="Headroom — Will it fit? For how many? How fast?" />
+    <meta
+      property="og:description"
+      content="A local-LLM VRAM and KV-cache calculator. Give it a Hugging Face repo id, a quant, your GPU(s), a context length and a user count."
+    />
+    <meta property="og:url" content="https://blaine-hiers.github.io/headroom/" />
+    <meta property="og:image" content="https://blaine-hiers.github.io/headroom/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Headroom — Will it fit? For how many? How fast?" />
+    <meta
+      name="twitter:description"
+      content="A local-LLM VRAM and KV-cache calculator. Give it a Hugging Face repo id, a quant, your GPU(s), a context length and a user count."
+    />
+    <meta name="twitter:image" content="https://blaine-hiers.github.io/headroom/og.png" />
     <script>
       // Set the theme before first paint so there is no flash; the app takes over after load.
       (function () {

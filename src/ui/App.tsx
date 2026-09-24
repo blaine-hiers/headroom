@@ -70,7 +70,7 @@ export default function App() {
             onChange={(patch) => dispatch({ type: 'speculative', patch })}
           />
         </div>
-        <Results state={state} result={result} onApplyFit={applyFit} />
+        <Results state={state} result={result} onApplyFit={applyFit} getLink={getLink} />
       </main>
       <footer className="footer muted">
         Model data from the Hugging Face Hub (config.json + safetensors parameter count, repo file sizes, GGUF headers) or built-in presets.
