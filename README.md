@@ -109,7 +109,7 @@ For a repo id, Headroom makes two requests straight from your browser. The Hub s
 
 Gated repos such as Llama and Gemma return 401 without a token. You have two options:
 
-- Paste a Hugging Face token under **Gated models**. It is stored only in your browser's `localStorage` and sent only to huggingface.co.
+- Paste a Hugging Face token under **Gated models**. With **Remember token on this device** checked, it's stored in your browser's `localStorage`; unchecked (the default), it's kept in memory only and cleared on reload. Either way it's sent only to huggingface.co.
 - Use a built-in preset.
 
 GGUF repos are not parsed. Look up the base BF16 repo instead, since it has the same architecture, then choose the GGUF quant.

@@ -2,6 +2,7 @@
 
 export const THEME_KEY = 'headroom.theme';
 export const TOKEN_KEY = 'headroom.hfToken';
+export const REMEMBER_TOKEN_KEY = 'headroom.rememberToken';
 
 export function readStorage(key: string): string | null {
   try {
