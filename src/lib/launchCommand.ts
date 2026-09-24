@@ -1,8 +1,10 @@
 // Builds a ready-to-paste launch command for the chosen runtime profile from the current
 // calculator state. Pure and framework-free: src/ui/LaunchCommand.tsx only renders the result.
+import { findGpuPreset } from './presets/gpus';
 import {
   LLAMACPP_DEFAULT_CACHE_TYPE,
   PAGED_DEFAULT_KV_CACHE_DTYPE,
+  RUNTIME_PROFILES,
   SGLANG_MEM_FRACTION_STATIC,
   VLLM_GPU_MEMORY_UTILIZATION,
   llamaCppCacheType,
@@ -18,6 +20,20 @@ export interface LaunchCommand {
   notes: string[];
 }
 
+/** Characters that never need shell-quoting: a typical HF repo id, path, or number. */
+const SAFE_SHELL_ARG = /^[A-Za-z0-9._/:@=+-]+$/;
+
+/** POSIX single-quotes `value` if it contains anything outside the safe set, so it survives as one shell argument. */
+export function shellQuote(value: string): string {
+  if (SAFE_SHELL_ARG.test(value)) return value;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Rough heuristic: llama.cpp's `-hf` resolves a repo containing GGUF files; a plain safetensors repo id 404s. */
+function looksLikeGgufRepo(id: string): boolean {
+  return /gguf/i.test(id);
+}
+
 /** vLLM/SGLang KV dtypes that aren't the runtime's native/auto type get an approximation note. */
 function kvApproximationNote(kv: CalcState['quant']['kv'], runtime: 'vLLM' | 'SGLang'): string | null {
   if (kv === 'int8' || kv === 'int4') {
@@ -26,16 +42,31 @@ function kvApproximationNote(kv: CalcState['quant']['kv'], runtime: 'vLLM' | 'SG
   return null;
 }
 
+/** Flags a runtime/GPU-vendor mismatch (MLX needs Apple silicon; vLLM/SGLang target NVIDIA/AMD). Unknown/custom/"other" GPUs are not checked. */
+function hardwareMismatchNote(runtime: CalcState['runtime'], gpuName: string): string | null {
+  const vendor = findGpuPreset(gpuName)?.vendor;
+  if (!vendor || vendor === 'other') return null;
+  if (runtime === 'mlx' && vendor !== 'apple') {
+    return `${RUNTIME_PROFILES.mlx.label} runs on Apple unified memory; ${gpuName} is not Apple silicon, so this command will not run as-is.`;
+  }
+  if ((runtime === 'vllm' || runtime === 'sglang') && vendor === 'apple') {
+    return `${RUNTIME_PROFILES[runtime].label} targets NVIDIA/AMD GPUs; ${gpuName} is not a supported backend.`;
+  }
+  return null;
+}
+
 export function buildLaunchCommand(state: CalcState): LaunchCommand {
   const { model, quant, hardware, workload, runtime } = state;
   const id = model.id || model.name;
+  const quotedId = shellQuote(id);
   const C = Math.max(0, Math.floor(workload.contextTokens));
   const N = Math.max(1, Math.floor(workload.concurrentUsers));
   const gpuCount = Math.max(1, Math.floor(hardware.gpuCount));
+  const mismatchNote = hardwareMismatchNote(runtime, hardware.gpuName);
 
   switch (runtime) {
     case 'vllm': {
-      const parts = [`vllm serve ${id}`, `--max-model-len ${C}`, `--max-num-seqs ${N}`, `--gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION}`];
+      const parts = [`vllm serve ${quotedId}`, `--max-model-len ${C}`, `--max-num-seqs ${N}`, `--gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION}`];
       const kvDtype = pagedKvCacheDtype(quant.kv);
       if (kvDtype !== PAGED_DEFAULT_KV_CACHE_DTYPE) parts.push(`--kv-cache-dtype ${kvDtype}`);
       if (gpuCount > 1) parts.push(`--tensor-parallel-size ${gpuCount}`);
@@ -44,24 +75,32 @@ export function buildLaunchCommand(state: CalcState): LaunchCommand {
       ];
       const kvNote = kvApproximationNote(quant.kv, 'vLLM');
       if (kvNote) notes.push(kvNote);
+      if (mismatchNote) notes.push(mismatchNote);
       return { command: parts.join(' '), notes };
     }
     case 'llamacpp': {
       const totalCtx = C * N;
       const perSlot = llamaCppPerSlotContext(totalCtx, N);
-      const parts = [`llama-server -hf ${id}`, `-c ${totalCtx}`];
+      const isGguf = looksLikeGgufRepo(id);
+      const parts = [isGguf ? `llama-server -hf ${quotedId}` : 'llama-server -m /path/to/model.gguf', `-c ${totalCtx}`];
       if (N > 1) parts.push(`-np ${N}`);
       parts.push('-ngl 999');
       const cacheType = llamaCppCacheType(quant.kv);
       if (cacheType !== LLAMACPP_DEFAULT_CACHE_TYPE) parts.push(`--cache-type-k ${cacheType}`, `--cache-type-v ${cacheType}`);
       const notes = ['Starting point, not a guarantee: -ngl 999 offloads every layer, which needs enough VRAM for the whole model.'];
+      if (!isGguf) {
+        notes.push(
+          `llama.cpp needs a GGUF file: "${id}" does not look like a GGUF repo. Convert it, or find a -GGUF quant of it (e.g. a "…-GGUF" repo) and either replace -m with -hf <that repo> or point -m at a local .gguf file.`,
+        );
+      }
       if (perSlot < C) notes.push(`Per-slot context (${perSlot} tokens) is below the chosen context (${C} tokens) — raise -c or lower -np.`);
+      if (mismatchNote) notes.push(mismatchNote);
       return { command: parts.join(' '), notes };
     }
     case 'sglang': {
       const parts = [
         'python -m sglang.launch_server',
-        `--model-path ${id}`,
+        `--model-path ${quotedId}`,
         `--context-length ${C}`,
         `--max-running-requests ${N}`,
         `--mem-fraction-static ${SGLANG_MEM_FRACTION_STATIC}`,
@@ -72,14 +111,16 @@ export function buildLaunchCommand(state: CalcState): LaunchCommand {
       const notes = ['Starting point, not a guarantee: real usage also depends on batch size and the model.'];
       const kvNote = kvApproximationNote(quant.kv, 'SGLang');
       if (kvNote) notes.push(kvNote);
+      if (mismatchNote) notes.push(mismatchNote);
       return { command: parts.join(' '), notes };
     }
     case 'mlx': {
-      const parts = [`mlx_lm.server --model ${id} --max-kv-size ${C}`];
+      const parts = [`mlx_lm.server --model ${quotedId} --max-kv-size ${C}`];
       const notes = [
         'Starting point, not a guarantee: mlx_lm.server serves one request at a time, so concurrent users share this context sequentially rather than in parallel.',
         'Unified memory is shared with the OS — see the Apple wired-memory limit above.',
       ];
+      if (mismatchNote) notes.push(mismatchNote);
       return { command: parts.join(' '), notes };
     }
     case 'generic':

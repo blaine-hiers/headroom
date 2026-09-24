@@ -204,9 +204,17 @@ export function ShowTheMath({ state, result }: Props) {
         />
         <Step
           title="Max context for N users"
-          formula="min(maxPosition, floor((usable − fixed) / (N × KV per token)))"
-          sub={`min(${n(model.maxPositionEmbeddings)}, floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)})))`}
-          result={`${n(result.maxContextForUsers)} tokens`}
+          formula={
+            runtime === 'vllm'
+              ? `min(maxPosition, ${VLLM_KV_BLOCK_TOKENS} × floor((usable − fixed) / (N × KV per token) / ${VLLM_KV_BLOCK_TOKENS}))`
+              : 'min(maxPosition, floor((usable − fixed) / (N × KV per token)))'
+          }
+          sub={
+            runtime === 'vllm'
+              ? `min(${n(model.maxPositionEmbeddings)}, ${VLLM_KV_BLOCK_TOKENS} × floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)}) / ${VLLM_KV_BLOCK_TOKENS}))`
+              : `min(${n(model.maxPositionEmbeddings)}, floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)})))`
+          }
+          result={`${n(result.maxContextForUsers)} tokens${runtime === 'vllm' ? ' (rounded down to a block multiple, so it always fits)' : ''}`}
         />
         <ActiveParamsStep state={state} active={active} method={method} />
         <Step

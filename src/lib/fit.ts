@@ -3,7 +3,7 @@ import { decodeThroughput } from './throughput';
 import type { CalcResult, CalcState, HardwareSpec, RuntimeKey } from './types';
 import { activeParamsDetailed, weightBytes } from './weights';
 import { findGpuPreset } from './presets/gpus';
-import { SGLANG_MEM_FRACTION_STATIC, VLLM_GPU_MEMORY_UTILIZATION, VLLM_OVERHEAD_ALLOWANCE_GB, kvContextForRuntime } from './runtime';
+import { SGLANG_MEM_FRACTION_STATIC, VLLM_GPU_MEMORY_UTILIZATION, VLLM_KV_BLOCK_TOKENS, VLLM_OVERHEAD_ALLOWANCE_GB, kvContextForRuntime } from './runtime';
 
 export const TABLE_CONTEXTS = [2048, 8192, 32768, 131072] as const;
 
@@ -76,6 +76,14 @@ export function maxUsers(usable: number, fixed: number, kvPerRequest: number): n
 /**
  * min(maxPositionEmbeddings, floor((usable − fixed) / (users × bytesPerTokenFull))).
  * Uses the full-attention rate (conservative; sliding layers only lower real use).
+ *
+ * For vLLM, a request's KV reservation rounds UP to the next 16-token block
+ * (`kvContextForRuntime`), so solving from the unrounded per-token rate can report a context
+ * whose actual (rounded) reservation overshoots `usable`. Rounding the memory-bound answer
+ * DOWN to a block multiple guarantees the reported context's real reservation still fits —
+ * see the proof in fit.test.ts's "vLLM max-context block rounding" tests. The
+ * `maxPositionEmbeddings` cap is never rounded: if the model's own max already fits, there is
+ * nothing to shrink.
  */
 export function maxContext(
   usable: number,
@@ -83,12 +91,15 @@ export function maxContext(
   users: number,
   bytesPerTokenFull: number,
   maxPositionEmbeddings: number,
+  runtime: RuntimeKey = 'generic',
 ): number {
   const free = usable - fixed;
   if (!(free > 0)) return 0;
   if (!(bytesPerTokenFull > 0)) return maxPositionEmbeddings;
   const n = Math.max(1, users);
-  return Math.min(maxPositionEmbeddings, Math.floor(free / (n * bytesPerTokenFull)));
+  const memoryBound = free / (n * bytesPerTokenFull);
+  const rounded = runtime === 'vllm' ? Math.floor(memoryBound / VLLM_KV_BLOCK_TOKENS) * VLLM_KV_BLOCK_TOKENS : Math.floor(memoryBound);
+  return Math.min(maxPositionEmbeddings, rounded);
 }
 
 export function calculate(state: CalcState): CalcResult {
@@ -139,7 +150,7 @@ export function calculate(state: CalcState): CalcResult {
     headroomBytes: usable - total,
     fits: total <= usable,
     maxUsersAtContext: maxUsers(usable, fixed, perRequest),
-    maxContextForUsers: maxContext(usable, fixed, users, perToken, model.maxPositionEmbeddings),
+    maxContextForUsers: maxContext(usable, fixed, users, perToken, model.maxPositionEmbeddings, runtime),
     contextTable,
     throughput,
   };

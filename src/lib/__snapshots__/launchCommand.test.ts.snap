@@ -13,9 +13,10 @@ exports[`buildLaunchCommand > matches a snapshot per runtime 1`] = `
     ],
   },
   {
-    "command": "llama-server -hf meta-llama/Llama-3.3-70B-Instruct -c 32768 -np 4 -ngl 999",
+    "command": "llama-server -m /path/to/model.gguf -c 32768 -np 4 -ngl 999",
     "notes": [
       "Starting point, not a guarantee: -ngl 999 offloads every layer, which needs enough VRAM for the whole model.",
+      "llama.cpp needs a GGUF file: "meta-llama/Llama-3.3-70B-Instruct" does not look like a GGUF repo. Convert it, or find a -GGUF quant of it (e.g. a "…-GGUF" repo) and either replace -m with -hf <that repo> or point -m at a local .gguf file.",
     ],
   },
   {
@@ -29,6 +30,7 @@ exports[`buildLaunchCommand > matches a snapshot per runtime 1`] = `
     "notes": [
       "Starting point, not a guarantee: mlx_lm.server serves one request at a time, so concurrent users share this context sequentially rather than in parallel.",
       "Unified memory is shared with the OS — see the Apple wired-memory limit above.",
+      "MLX runs on Apple unified memory; H100 SXM is not Apple silicon, so this command will not run as-is.",
     ],
   },
 ]

@@ -93,7 +93,7 @@ All sizes are in bytes.
 - `total(N) = fixed + N × kvPerRequest(C)`
 - `fits = total(N) ≤ usable`. Headroom under 10% of usable is flagged as **Tight**.
 - `maxUsers(C) = floor((usable − fixed) / kvPerRequest(C))`, or 0 if that is negative
-- `maxContext(N) = min(maxPositionEmbeddings, floor((usable − fixed) / (N × bytesPerTokenFullAttention)))`. This uses the full-attention rate, so it is conservative: sliding layers only lower it.
+- `maxContext(N) = min(maxPositionEmbeddings, floor((usable − fixed) / (N × bytesPerTokenFullAttention)))`. This uses the full-attention rate, so it is conservative: sliding layers only lower it. Under `vllm`, the memory-bound half of that formula is additionally rounded DOWN to a 16-token block multiple, so the reported context's actual (block-rounded) KV reservation never overshoots `usable`.
 
 **Runtime profiles** (`src/lib/runtime.ts`, `src/lib/launchCommand.ts`). `generic` is the default and reproduces every number above exactly; the others change how usable VRAM (and, for vLLM, KV sizing) is computed, and add a *Launch command* card:
 
@@ -105,7 +105,7 @@ All sizes are in bytes.
 | `llamacpp` (covers Ollama) | same as `generic` | — | exact context; `-c` is one pool shared across `-np` parallel slots, so the launch command sets `-c` to `contextTokens × concurrentUsers` and shows/warns on the per-slot context (`c / np`) |
 | `mlx` | same as `generic` (Apple unified memory already goes through `effectiveVramGB`'s wired-memory limit above — MLX does not duplicate that math) | — | exact context |
 
-The launch command omits any flag that equals the runtime's own default (e.g. `--tensor-parallel-size` when `gpuCount` is 1, `--kv-cache-dtype`/`--cache-type-k/v` when the chosen KV quant is the runtime's native/unquantized type) and is always labelled a starting point, not a guarantee.
+The launch command omits any flag that equals the runtime's own default (e.g. `--tensor-parallel-size` when `gpuCount` is 1, `--kv-cache-dtype`/`--cache-type-k/v` when the chosen KV quant is the runtime's native/unquantized type) and is always labelled a starting point, not a guarantee. The model id is shell-quoted (POSIX single quotes) whenever it contains anything outside `[A-Za-z0-9._/:@=+-]`. For `llamacpp`, `-hf <id>` is only used when the id looks like a GGUF repo (contains "gguf"); otherwise the command falls back to a `-m /path/to/model.gguf` placeholder with a note, since llama.cpp needs an actual GGUF file and every bundled preset is a safetensors repo. The notes also flag an unusual runtime/GPU pairing (MLX on a non-Apple GPU, or vLLM/SGLang on an Apple GPU); an unrecognized or "Custom" GPU is never flagged.
 
 **Decode throughput** (an estimate: decode is limited by memory bandwidth)
 - `bytesPerStep(N) = activeWeightBytes + N × kvPerRequest(C)`

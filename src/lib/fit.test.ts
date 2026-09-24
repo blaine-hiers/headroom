@@ -3,8 +3,8 @@ import { makeSpec } from './__fixtures__/makeSpec';
 import { calculate, effectiveVramGB, maxContext, maxUsers, overheadBytes, overheadBytesForRuntime, usableBytes, usableBytesForRuntime } from './fit';
 import { findGpuPreset } from './presets/gpus';
 import { findModelPreset } from './presets/models';
-import { SGLANG_MEM_FRACTION_STATIC, VLLM_GPU_MEMORY_UTILIZATION, VLLM_OVERHEAD_ALLOWANCE_GB } from './runtime';
-import type { CalcState, HardwareSpec } from './types';
+import { SGLANG_MEM_FRACTION_STATIC, VLLM_GPU_MEMORY_UTILIZATION, VLLM_KV_BLOCK_TOKENS, VLLM_OVERHEAD_ALLOWANCE_GB } from './runtime';
+import type { CalcState, HardwareSpec, ModelSpec } from './types';
 
 const h100x4: HardwareSpec = { gpuName: 'H100 SXM', gpuCount: 4, vramGB: 80, bandwidthGBs: 3350, reservePct: 5, overheadGB: 1 };
 
@@ -268,6 +268,50 @@ describe('runtime profiles: vLLM usable-memory maths', () => {
     const exact = calculate(state({ runtime: 'vllm', workload: { contextTokens: 8192, concurrentUsers: 1 } }));
     const generic = calculate(state({ runtime: 'generic', workload: { contextTokens: 8192, concurrentUsers: 1 } }));
     expect(exact.kvBytesPerRequest).toBe(generic.kvBytesPerRequest);
+  });
+});
+
+describe('runtime profiles: vLLM max-context block rounding', () => {
+  it('reports a context whose actual (block-rounded) KV reservation still fits under usable (repro: Llama 3.1 8B, H100 80GB, reserve 5%, overhead 1GB, N=4)', () => {
+    const model = findModelPreset('Llama 3.1 8B');
+    if (!model) throw new Error('missing preset');
+    const hardware: HardwareSpec = { gpuName: 'H100 SXM', gpuCount: 1, vramGB: 80, bandwidthGBs: 3350, reservePct: 5, overheadGB: 1 };
+    // workload.contextTokens does not affect maxContextForUsers; any value probes it.
+    const probe = calculate(state({ model, hardware, runtime: 'vllm', workload: { contextTokens: 8192, concurrentUsers: 4 } }));
+    const C = probe.maxContextForUsers;
+    expect(C).toBeLessThan(model.maxPositionEmbeddings); // memory-bound in this scenario, not the model cap
+    expect(C % VLLM_KV_BLOCK_TOKENS).toBe(0);
+    const atC = calculate(state({ model, hardware, runtime: 'vllm', workload: { contextTokens: C, concurrentUsers: 4 } }));
+    expect(atC.totalBytes).toBeLessThanOrEqual(atC.usableBytes);
+  });
+
+  it('never overshoots usable across a range of models, hardware and user counts (that fit at all)', () => {
+    const llama8b = findModelPreset('Llama 3.1 8B');
+    if (!llama8b) throw new Error('missing preset');
+    const configs: Array<{ model: ModelSpec; hardware: HardwareSpec; users: number }> = [
+      { model: makeSpec(), hardware: h100x4, users: 4 }, // 70B dense, comfortably fits 4×H100
+      { model: llama8b, hardware: { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, reservePct: 5, overheadGB: 1 }, users: 8 },
+      {
+        model: makeSpec({ numKvHeads: 32, headDim: 128, numLayers: 40 }),
+        hardware: { gpuName: 'H200', gpuCount: 2, vramGB: 141, bandwidthGBs: 4800, reservePct: 10, overheadGB: 2 },
+        users: 16,
+      },
+    ];
+    for (const { model, hardware, users } of configs) {
+      const probe = calculate(state({ model, hardware, runtime: 'vllm', workload: { contextTokens: 4096, concurrentUsers: users } }));
+      const C = probe.maxContextForUsers;
+      // Sanity check the fixture: the model must actually fit before any context is asked for.
+      expect(probe.weightBytes + probe.overheadBytes).toBeLessThan(probe.usableBytes);
+      const atC = calculate(state({ model, hardware, runtime: 'vllm', workload: { contextTokens: C, concurrentUsers: users } }));
+      expect(atC.totalBytes).toBeLessThanOrEqual(atC.usableBytes);
+    }
+  });
+
+  it('non-vLLM runtimes keep the unrounded maxContext formula', () => {
+    for (const runtime of ['generic', 'llamacpp', 'sglang', 'mlx'] as const) {
+      expect(maxContext(1000, 0, 2, 10, 1_000_000, runtime)).toBe(50);
+    }
+    expect(maxContext(1000, 0, 2, 10, 1_000_000, 'vllm')).toBe(48); // 50 rounded down to a 16-token block
   });
 });
 
