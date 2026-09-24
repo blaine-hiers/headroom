@@ -33,8 +33,8 @@ export const GPU_PRESETS: GpuPreset[] = [
   { name: 'RTX 4090', vendor: 'nvidia-consumer', vramGB: 24, bandwidthGBs: 1008, tflopsBf16: 165.0 }, // Ada AD102 architecture whitepaper
   { name: 'RTX 5080', vendor: 'nvidia-consumer', vramGB: 16, bandwidthGBs: 960, tflopsBf16: 112.6 }, // Blackwell GB203: scaled from RTX 5090 by SM count × clock
   { name: 'RTX 5090', vendor: 'nvidia-consumer', vramGB: 32, bandwidthGBs: 1792, tflopsBf16: 209.5 }, // RTX Blackwell GPU architecture whitepaper
-  { name: 'RTX 6000 Ada', vendor: 'nvidia-consumer', vramGB: 48, bandwidthGBs: 960, tflopsBf16: 182.0 }, // Ada AD102 (full die): scaled from RTX 4090 by SM count × clock
-  { name: 'RTX PRO 6000 Blackwell', vendor: 'nvidia-consumer', vramGB: 96, bandwidthGBs: 1792, tflopsBf16: 252.0 }, // NVIDIA RTX PRO 6000 Blackwell Workstation Edition datasheet
+  { name: 'RTX 6000 Ada', vendor: 'nvidia-consumer', vramGB: 48, bandwidthGBs: 960, tflopsBf16: 364.0 }, // RTX 6000 Ada datasheet: 1457 TFLOPS FP8 with sparsity, halved for dense and again for FP16. Workstation cards run FP32 accumulate at full rate, unlike GeForce (cf. L40S, same AD102)
+  { name: 'RTX PRO 6000 Blackwell', vendor: 'nvidia-consumer', vramGB: 96, bandwidthGBs: 1792, tflopsBf16: 500.0 }, // estimate: datasheet 4000 AI TOPS (FP4 with sparsity) halved for dense, FP8 and FP16. Workstation cards run FP32 accumulate at full rate, unlike GeForce
   // NVIDIA datacenter
   { name: 'L4', vendor: 'nvidia-datacenter', vramGB: 24, bandwidthGBs: 300, tflopsBf16: 121.0 }, // NVIDIA L4 datasheet (FP16 Tensor Core, dense)
   { name: 'L40S', vendor: 'nvidia-datacenter', vramGB: 48, bandwidthGBs: 864, tflopsBf16: 362.0 }, // NVIDIA L40S datasheet (FP16 Tensor Core, dense)
