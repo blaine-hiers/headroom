@@ -1,4 +1,4 @@
-import { resolveOffload } from './offload';
+import { DEFAULT_OFFLOAD, resolveOffload } from './offload';
 import { KV_QUANTS, WEIGHT_QUANTS } from './quant';
 import type {
   Attention,
@@ -88,7 +88,11 @@ export function encodeState(state: CalcState): string {
   set(K.reservePct, h.reservePct);
   set(K.overheadGB, h.overheadGB);
   set(K.appleWiredLimitGB, h.appleWiredLimitGB);
-  if (h.offload) {
+  // Skip entirely when it's the untouched default (disabled, stock RAM figures) so a fresh
+  // load doesn't grow the URL with keys that mean nothing yet.
+  const isDefaultOffload =
+    !h.offload || (!h.offload.enabled && h.offload.systemRamGB === DEFAULT_OFFLOAD.systemRamGB && h.offload.ramBandwidthGBs === DEFAULT_OFFLOAD.ramBandwidthGBs);
+  if (h.offload && !isDefaultOffload) {
     set(K.offloadEnabled, h.offload.enabled ? 1 : 0);
     set(K.systemRamGB, h.offload.systemRamGB);
     set(K.ramBandwidthGBs, h.offload.ramBandwidthGBs);

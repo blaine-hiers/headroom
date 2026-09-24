@@ -54,7 +54,8 @@ export function Results({ state, result }: Props) {
   const offloaded = offloadEnabled && result.offload.cpuLayers > 0;
   // Offload replaces the classic fits/tight/nofit badge only once it actually moves layers to RAM.
   const level: FitLevel = offloaded ? (result.offload.fitsInRam ? 'offloaded' : 'nofit') : fitLevel(result.fits, result.headroomBytes, result.usableBytes);
-  const fixedTooBig = result.weightBytes + result.overheadBytes > result.usableBytes;
+  // fixedBytes already accounts for offload (GPU-resident weights + overhead) when it's on.
+  const fixedTooBig = result.fixedBytes > result.usableBytes;
   const tpWarnings = tensorParallelWarnings(result.tensorParallel, model.numKvHeads);
 
   return (
@@ -135,7 +136,13 @@ export function Results({ state, result }: Props) {
         <div className="card callout">
           <h3>Max users at {formatTokens(C)}</h3>
           <p className="big num">{users(result.maxUsersAtContext)}</p>
-          <p className="muted">{fixedTooBig ? 'weights + overhead alone exceed usable VRAM' : 'concurrent requests, each at full context'}</p>
+          <p className="muted">
+            {fixedTooBig
+              ? offloadEnabled
+                ? 'GPU-resident weights + overhead alone exceed usable VRAM'
+                : 'weights + overhead alone exceed usable VRAM'
+              : 'concurrent requests, each at full context'}
+          </p>
         </div>
         <div className="card callout">
           <h3>

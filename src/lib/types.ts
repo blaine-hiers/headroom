@@ -162,7 +162,11 @@ export interface OffloadPlan {
   gpuWeightBytes: number;
   /** Weight bytes placed in system RAM. */
   cpuWeightBytes: number;
-  /** True when cpuWeightBytes fits in systemRamGB. Always true when offload is disabled or nothing is offloaded. */
+  /**
+   * True when the split actually works: the GPU can hold its own KV cache and overhead on their
+   * own (KV never leaves the GPU), AND cpuWeightBytes fits in systemRamGB. Always true when
+   * offload is disabled.
+   */
   fitsInRam: boolean;
 }
 
@@ -192,6 +196,15 @@ export interface CalcResult {
   totalBytes: number;
   headroomBytes: number; // usable - total (negative when it does not fit)
   fits: boolean;
+  /**
+   * Everything that doesn't scale with concurrent users: weights + overhead normally, or —
+   * with CPU/RAM offload on — the GPU-resident weights + overhead, since the rest already
+   * spilled to RAM. Shared by the capacity math (maxUsers/maxContext), the "fixed alone
+   * exceeds usable" check, and the chart, so they all agree with the fit/offload badge.
+   */
+  fixedBytes: number;
+  /** Everything that scales per user at the chosen context: KV bytes per request (KV always stays on the GPU). */
+  bytesPerUser: number;
   maxUsersAtContext: number;
   maxContextForUsers: number;
   /** rows for 2K / 8K / 32K / 128K plus the chosen context if different */

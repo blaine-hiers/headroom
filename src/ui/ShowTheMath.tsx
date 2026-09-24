@@ -218,10 +218,20 @@ export function ShowTheMath({ state, result }: Props) {
               result={`${n(offloadPlan.gpuLayers)} of ${n(model.numLayers)} on GPU, ${n(offloadPlan.cpuLayers)} in RAM`}
             />
             <Step
-              title="Offload: fits in system RAM?"
-              formula="cpuWeightBytes ≤ systemRamGB × 1e9"
-              sub={`${n(offloadPlan.cpuWeightBytes)} ≤ ${n(offload.systemRamGB)} × 1e9`}
-              result={offloadPlan.fitsInRam ? 'yes' : 'no'}
+              title="Offload: does the split actually run?"
+              formula="(available ≥ 0) and (cpuWeightBytes ≤ systemRamGB × 1e9)"
+              sub={
+                <>
+                  ({n(gpuAvailable)} ≥ 0) and ({n(offloadPlan.cpuWeightBytes)} ≤ {n(offload.systemRamGB)} × 1e9)
+                </>
+              }
+              result={
+                offloadPlan.fitsInRam
+                  ? 'yes'
+                  : gpuAvailable < 0
+                    ? 'no — KV + overhead alone exceed usable VRAM; no amount of RAM fixes that'
+                    : 'no — the RAM-resident layers do not fit in system RAM'
+              }
             />
             <Step
               title="Offload: decode throughput"

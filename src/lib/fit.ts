@@ -87,13 +87,28 @@ export function calculate(state: CalcState): CalcResult {
   const fixed = weights + overhead;
   const total = fixed + allUsers;
 
+  // CPU/RAM layer offload (llama.cpp's -ngl): off unless hardware.offload.enabled (see offload.ts).
+  // KV stays on the GPU (llama.cpp's default), so only weight bytes are split here.
+  const offloadSpec = resolveOffload(hardware.offload);
+  const offload = planOffload({
+    weightBytes: weights,
+    numLayers: model.numLayers,
+    usableGpuBytes: usable - overhead - allUsers,
+    offload: offloadSpec,
+  });
+  // Capacity math (max users/context, the context table, the chart) treats the GPU-resident
+  // weights as the fixed cost once offload is on, assuming the rest already spilled to RAM —
+  // the same simplification planOffload makes, so they agree with the fit/offload badge.
+  // Bit-identical to `fixed` when offload is off/absent (no separate computation).
+  const fixedBytes = offloadSpec.enabled ? offload.gpuWeightBytes + overhead : fixed;
+
   const contexts = new Set<number>(TABLE_CONTEXTS);
   contexts.add(ctx);
   const contextTable = [...contexts]
     .sort((a, b) => a - b)
     .map((c) => {
       const kvReq = kvBytesForContext(model, c, quant.kv) * kvReplication;
-      return { contextTokens: c, kvBytesPerRequest: kvReq, maxUsers: maxUsers(usable, fixed, kvReq) };
+      return { contextTokens: c, kvBytesPerRequest: kvReq, maxUsers: maxUsers(usable, fixedBytes, kvReq) };
     });
 
   // Recomputed from the spec (not model.activeParams) so a manual edit stays consistent.
@@ -110,29 +125,24 @@ export function calculate(state: CalcState): CalcResult {
     efficiency: DECODE_EFFICIENCY * tensorParallelEfficiency(hardware.gpuCount),
   });
 
-  // CPU/RAM layer offload (llama.cpp's -ngl): off unless hardware.offload.enabled (see offload.ts).
-  // KV stays on the GPU (llama.cpp's default), so only weight bytes are split here.
-  const offloadSpec = resolveOffload(hardware.offload);
-  const offload = planOffload({
-    weightBytes: weights,
-    numLayers: model.numLayers,
-    usableGpuBytes: usable - overhead - allUsers,
-    offload: offloadSpec,
-  });
   // Left untouched (same object, not recomputed) when offload is off, so throughput stays bit-identical.
   const activeSplit = splitByLayerFraction(activeWeightBytes, offload.gpuLayers, model.numLayers);
-  const offloadThroughput = offloadSpec.enabled
-    ? offloadDecodeThroughput({
-        gpuActiveWeightBytes: activeSplit.gpu,
-        cpuActiveWeightBytes: activeSplit.cpu,
-        kvBytesPerRequest: perRequest,
-        concurrentUsers: users,
-        bandwidthGBs: hardware.bandwidthGBs,
-        gpuCount: hardware.gpuCount,
-        ramBandwidthGBs: offloadSpec.ramBandwidthGBs,
-        gpuEfficiency: DECODE_EFFICIENCY * tensorParallelEfficiency(hardware.gpuCount),
-      })
-    : throughput;
+  const offloadEfficiency = DECODE_EFFICIENCY * tensorParallelEfficiency(hardware.gpuCount);
+  const offloadThroughput = !offloadSpec.enabled
+    ? throughput
+    : !offload.fitsInRam
+      // Doesn't actually run (even with RAM): don't present a throughput number as achievable.
+      ? { perUserTokS: 0, aggregateTokS: 0, efficiency: offloadEfficiency }
+      : offloadDecodeThroughput({
+          gpuActiveWeightBytes: activeSplit.gpu,
+          cpuActiveWeightBytes: activeSplit.cpu,
+          kvBytesPerRequest: perRequest,
+          concurrentUsers: users,
+          bandwidthGBs: hardware.bandwidthGBs,
+          gpuCount: hardware.gpuCount,
+          ramBandwidthGBs: offloadSpec.ramBandwidthGBs,
+          gpuEfficiency: offloadEfficiency,
+        });
 
   return {
     kvBytesPerToken: perToken,
@@ -146,8 +156,10 @@ export function calculate(state: CalcState): CalcResult {
     totalBytes: total,
     headroomBytes: usable - total,
     fits: total <= usable,
-    maxUsersAtContext: maxUsers(usable, fixed, perRequest),
-    maxContextForUsers: maxContext(usable, fixed, users, perToken, model.maxPositionEmbeddings),
+    fixedBytes,
+    bytesPerUser: perRequest,
+    maxUsersAtContext: maxUsers(usable, fixedBytes, perRequest),
+    maxContextForUsers: maxContext(usable, fixedBytes, users, perToken, model.maxPositionEmbeddings),
     contextTable,
     throughput: offloadThroughput,
     tensorParallel,

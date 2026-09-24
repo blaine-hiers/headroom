@@ -65,6 +65,28 @@ describe('planOffload', () => {
     expect(plan.cpuLayers).toBe(80);
     expect(plan.gpuWeightBytes).toBe(0);
     expect(plan.cpuWeightBytes).toBe(80e9);
+    // Negative usableGpuBytes means KV + overhead alone already exceed usable VRAM: no amount
+    // of system RAM can rescue that, since KV never leaves the GPU.
+    expect(plan.fitsInRam).toBe(false);
+  });
+
+  it('GPU-side check: KV + overhead alone exceeding usable fails even with unlimited RAM', () => {
+    const offload: OffloadSpec = { enabled: true, systemRamGB: 1_000_000, ramBandwidthGBs: 50 };
+    const plan = planOffload({ weightBytes: 80e9, numLayers: 80, usableGpuBytes: -1e9, offload });
+    expect(plan.gpuLayers).toBe(0);
+    expect(plan.cpuLayers).toBe(80);
+    expect(plan.cpuWeightBytes).toBe(80e9); // well within the "unlimited" RAM
+    expect(plan.fitsInRam).toBe(false);
+  });
+
+  it('GPU-side check passes and RAM-side check is what decides it when usableGpuBytes >= 0', () => {
+    const offload: OffloadSpec = { enabled: true, systemRamGB: 64, ramBandwidthGBs: 50 };
+    // 30 GB fit on GPU, 50 GB owed to RAM: fits in 64 GB RAM.
+    const fits = planOffload({ weightBytes: 80e9, numLayers: 80, usableGpuBytes: 30e9, offload });
+    expect(fits.fitsInRam).toBe(true);
+    // Same GPU split, but only 32 GB RAM: the 50 GB owed to RAM doesn't fit.
+    const tooSmallRam = planOffload({ weightBytes: 80e9, numLayers: 80, usableGpuBytes: 30e9, offload: { ...offload, systemRamGB: 32 } });
+    expect(tooSmallRam.fitsInRam).toBe(false);
   });
 
   it('zero layers does not divide by zero', () => {

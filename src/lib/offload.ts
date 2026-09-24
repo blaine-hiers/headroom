@@ -52,7 +52,11 @@ export function planOffload({ weightBytes, numLayers, usableGpuBytes, offload }:
   const cpuLayers = layers - gpuLayers;
   const gpuWeightBytes = gpuLayers * bytesPerLayer;
   const cpuWeightBytes = weightBytes - gpuWeightBytes;
-  const fitsInRam = cpuWeightBytes <= offload.systemRamGB * 1e9;
+  // KV stays on the GPU, so `usableGpuBytes` (usable − overhead − KV) already has to be
+  // non-negative on its own — offloading every last layer can't rescue a GPU that can't even
+  // hold its own KV cache and overhead.
+  const gpuBaseFits = usableGpuBytes >= 0;
+  const fitsInRam = gpuBaseFits && cpuWeightBytes <= offload.systemRamGB * 1e9;
 
   return { gpuLayers, cpuLayers, bytesPerLayer, gpuWeightBytes, cpuWeightBytes, fitsInRam };
 }
