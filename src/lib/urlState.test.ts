@@ -8,7 +8,7 @@ import { activeParamsDetailed } from './weights';
 const fallback: CalcState = {
   model: makeSpec(),
   quant: { weight: 'bf16', kv: 'fp16' },
-  hardware: { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, reservePct: 5, overheadGB: 1 },
+  hardware: { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, tflopsBf16: 82.6, reservePct: 5, overheadGB: 1 },
   workload: { contextTokens: 8192, concurrentUsers: 1 },
 };
 
@@ -18,7 +18,7 @@ describe('urlState', () => {
       const s: CalcState = {
         model,
         quant: { weight: 'q4_k_m', kv: 'fp8' },
-        hardware: { gpuName: 'H100 SXM', gpuCount: 8, vramGB: 80, bandwidthGBs: 3350, reservePct: 7.5, overheadGB: 1.25 },
+        hardware: { gpuName: 'H100 SXM', gpuCount: 8, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 7.5, overheadGB: 1.25 },
         workload: { contextTokens: 32768, concurrentUsers: 16 },
       };
       const qs = encodeState(s);
@@ -54,6 +54,15 @@ describe('urlState', () => {
     expect(qs).toContain('wq=bf16');
     expect(qs).toContain('c=8192');
     expect(qs.length).toBeLessThan(400);
+  });
+
+  it('an old link without tflopsBf16 (issue #11) still decodes, defaulting the new field', () => {
+    const qs = encodeState(fallback).replace(/&?tf=[^&]*/, '');
+    expect(qs).not.toContain('tf=');
+    const decoded = decodeState(qs, fallback);
+    expect(decoded).not.toBe(fallback);
+    expect(decoded.hardware.tflopsBf16).toBe(100);
+    expect(decoded).toEqual({ ...fallback, hardware: { ...fallback.hardware, tflopsBf16: 100 } });
   });
 
   it('bad input → fallback', () => {

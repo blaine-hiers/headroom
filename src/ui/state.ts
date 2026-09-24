@@ -28,6 +28,7 @@ export const defaultState: CalcState = {
     gpuCount: 1,
     vramGB: DEFAULT_GPU?.vramGB ?? 24,
     bandwidthGBs: DEFAULT_GPU?.bandwidthGBs ?? 1008,
+    tflopsBf16: DEFAULT_GPU?.tflopsBf16 ?? 100,
     reservePct: 5,
     overheadGB: 1,
   },
@@ -87,8 +88,9 @@ export function reducer(state: CalcState, action: Action): CalcState {
         if (preset) {
           hw.vramGB = preset.vramGB;
           hw.bandwidthGBs = preset.bandwidthGBs;
+          hw.tflopsBf16 = preset.tflopsBf16;
         }
-      } else if (p.gpuName === undefined && (p.vramGB !== undefined || p.bandwidthGBs !== undefined)) {
+      } else if (p.gpuName === undefined && (p.vramGB !== undefined || p.bandwidthGBs !== undefined || p.tflopsBf16 !== undefined)) {
         hw.gpuName = CUSTOM_GPU_NAME;
       }
       return { ...state, hardware: hw };
@@ -163,6 +165,7 @@ export function initialState(search: string): CalcState {
       gpuCount: Math.round(clamp(hw.gpuCount, 1, MAX_GPUS)),
       vramGB: clamp(hw.vramGB, 0.1, 4096),
       bandwidthGBs: clamp(hw.bandwidthGBs, 1, 100000),
+      tflopsBf16: clamp(hw.tflopsBf16, 0.1, 100000),
       reservePct: clamp(hw.reservePct, 0, 50),
       overheadGB: clamp(hw.overheadGB, 0, 8),
     },

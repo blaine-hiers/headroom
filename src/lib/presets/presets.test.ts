@@ -29,6 +29,15 @@ describe('GPU presets', () => {
       expect(g.bandwidthGBs).toBeGreaterThan(0);
     }
   });
+
+  it('every preset has a sane dense BF16 TFLOPS figure', () => {
+    for (const g of GPU_PRESETS) {
+      expect(Number.isFinite(g.tflopsBf16), g.name).toBe(true);
+      // Bracket: a Turing consumer card at the low end, a Blackwell datacenter part at the high end.
+      expect(g.tflopsBf16, g.name).toBeGreaterThan(5);
+      expect(g.tflopsBf16, g.name).toBeLessThan(5000);
+    }
+  });
 });
 
 describe('model presets', () => {

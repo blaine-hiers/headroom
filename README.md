@@ -98,7 +98,12 @@ All sizes are in bytes.
 - `bytesPerStep(N) = activeWeightBytes + N × kvPerRequest(C)`
 - `stepsPerSec = bandwidthGBs × 1e9 × gpuCount × 0.7 / bytesPerStep(N)`. With more than one GPU this assumes tensor parallelism, so bandwidth adds up.
 - per-user tok/s = `stepsPerSec`; aggregate tok/s = `stepsPerSec × N`
-- Prefill (time to first token) is compute-bound and is not estimated.
+
+**Prefill / time-to-first-token** (an estimate: prefill is compute-bound, not bandwidth-bound)
+- `prefillFlops ≈ 2 × activeParams × promptTokens + 2 × numLayers × promptTokens² × queryWidth`. The first term is the matmuls (same accounting as decode); the second is the O(n²) attention term (QKᵀ and attention × V).
+  - `queryWidth = numAttentionHeads × headDim` when the config gives a head count (`ffn.numAttentionHeads`); otherwise `hiddenSize` stands in, since `numAttentionHeads × headDim ≈ hiddenSize` for the query projection. Which one was used is labelled next to the estimate.
+- `TTFT = prefillFlops / (tflopsBf16 × 1e12 × gpuCount × MFU)`, with `MFU` (model FLOPS utilization) defaulting to **0.4**, labelled as such. `tflopsBf16` is the GPU's dense (no-sparsity) BF16 tensor rate; the estimate keeps that rate even at lower weight quants (an fp8 rate would need a separate GPU field).
+- Shown for one user at the chosen context, next to the decode throughput, as a compute-bound estimate.
 
 ## Where the model data comes from
 
@@ -118,7 +123,7 @@ GGUF repos are not parsed. Look up the base BF16 repo instead, since it has the 
 
 Presets are plain data in [`src/lib/presets/`](src/lib/presets/):
 
-- **GPU:** add an entry to `GPU_PRESETS` in `gpus.ts` with its `name`, `vendor` (`nvidia-consumer`, `nvidia-datacenter`, `amd`, `apple` or `other`), per-GPU `vramGB` in decimal GB, and `bandwidthGBs`. It appears in the GPU select under its vendor group.
+- **GPU:** add an entry to `GPU_PRESETS` in `gpus.ts` with its `name`, `vendor` (`nvidia-consumer`, `nvidia-datacenter`, `amd`, `apple` or `other`), per-GPU `vramGB` in decimal GB, `bandwidthGBs`, and `tflopsBf16` (dense, no-sparsity BF16 tensor TFLOPS from the vendor spec sheet; used for the TTFT estimate). It appears in the GPU select under its vendor group, with all three fields editable once selected.
 - **Model:** add a `preset({...})` entry to `MODEL_PRESETS` in `models.ts`. Take the values from the repo's `config.json` and the Hub API's `safetensors.total`. It appears as a quick-pick chip. Add `warnings` for anything a user should know, such as sliding windows, MoE or pre-quantized weights.
 
 Then run `npm test`: `presets.test.ts` checks every preset for sane values.

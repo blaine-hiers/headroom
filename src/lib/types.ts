@@ -91,6 +91,8 @@ export interface HardwareSpec {
   vramGB: number;
   /** Per GPU, GB/s. */
   bandwidthGBs: number;
+  /** Per GPU, dense (no sparsity) BF16 tensor TFLOPS; used for the prefill/TTFT estimate. */
+  tflopsBf16: number;
   /** Percent of VRAM kept free (default 5). */
   reservePct: number;
   /** Runtime/CUDA-context overhead per GPU in GB (default 1). */
@@ -128,4 +130,6 @@ export interface CalcResult {
   /** rows for 2K / 8K / 32K / 128K plus the chosen context if different */
   contextTable: Array<{ contextTokens: number; kvBytesPerRequest: number; maxUsers: number }>;
   throughput: { perUserTokS: number; aggregateTokS: number; efficiency: number };
+  /** Prefill / time-to-first-token estimate for one user at the chosen context (compute-bound). */
+  prefill: { ttftSeconds: number; flops: number; mfu: number; headsSource: 'model' | 'hiddenSize-fallback' };
 }

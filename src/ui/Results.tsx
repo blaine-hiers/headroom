@@ -1,4 +1,4 @@
-import { formatNumber, formatTokens, KV_QUANTS, WEIGHT_QUANTS } from '../lib';
+import { formatNumber, formatSeconds, formatTokens, KV_QUANTS, WEIGHT_QUANTS } from '../lib';
 import type { ActiveParamsMethod, CalcResult, CalcState } from '../lib';
 import { Bytes } from './Bytes';
 import { Chart } from './Chart';
@@ -155,8 +155,16 @@ export function Results({ state, result }: Props) {
             <p className="big num">{tokS(result.throughput.aggregateTokS)}</p>
             <p className="muted">tok/s aggregate</p>
           </div>
+          <div>
+            <p className="big num">{formatSeconds(result.prefill.ttftSeconds)}</p>
+            <p className="muted">time to first token (1 user)</p>
+          </div>
         </div>
-        <p className="help">bandwidth-bound decode estimate, ×{result.throughput.efficiency} efficiency; prefill not included</p>
+        <p className="help">bandwidth-bound decode estimate, ×{result.throughput.efficiency} efficiency</p>
+        <p className="help">
+          TTFT is a compute-bound estimate, BF16 rate, ×{result.prefill.mfu} MFU
+          {result.prefill.headsSource === 'hiddenSize-fallback' ? '; head count unknown, hiddenSize used in its place' : ''}
+        </p>
       </div>
 
       <Chart result={result} users={N} />

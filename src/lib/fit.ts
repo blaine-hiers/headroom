@@ -1,4 +1,5 @@
 import { kvBytesForContext, kvBytesPerToken } from './kvcache';
+import { estimateTtft, prefillFlops } from './prefill';
 import { decodeThroughput } from './throughput';
 import type { CalcResult, CalcState, HardwareSpec } from './types';
 import { activeParamsDetailed, weightBytes } from './weights';
@@ -75,6 +76,16 @@ export function calculate(state: CalcState): CalcResult {
     gpuCount: hardware.gpuCount,
   });
 
+  const pf = prefillFlops({
+    activeParams: active.active,
+    promptTokens: ctx,
+    numLayers: model.numLayers,
+    headDim: model.headDim,
+    numHeads: model.ffn?.numAttentionHeads,
+    hiddenSize: model.hiddenSize,
+  });
+  const ttft = estimateTtft({ flops: pf.flops, tflopsBf16: hardware.tflopsBf16, gpuCount: hardware.gpuCount });
+
   return {
     kvBytesPerToken: perToken,
     kvBytesPerRequest: perRequest,
@@ -91,5 +102,6 @@ export function calculate(state: CalcState): CalcResult {
     maxContextForUsers: maxContext(usable, fixed, users, perToken, model.maxPositionEmbeddings),
     contextTable,
     throughput,
+    prefill: { ttftSeconds: ttft.ttftSeconds, flops: pf.flops, mfu: ttft.mfu, headsSource: pf.headsSource },
   };
 }
