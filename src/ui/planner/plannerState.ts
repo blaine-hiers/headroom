@@ -9,7 +9,9 @@
 // serve N users?") reads it to preselect the model it sizes hardware for.
 
 import { GPU_VENDOR_GROUPS, KV_QUANTS, RUNTIME_KEYS, WEIGHT_QUANTS } from '../../lib';
-import type { GpuVendor, KvQuantKey, RuntimeKey, WeightQuantKey } from '../../lib';
+import type { GpuVendor, HardwareSizingSort, KvQuantKey, RuntimeKey, WeightQuantKey } from '../../lib';
+
+const HARDWARE_SIZING_SORTS: readonly HardwareSizingSort[] = ['smallest', 'cheapest'];
 
 /** Step 2's own inputs (issue #25). Kept as one sub-object so it can be reset/patched as a unit. */
 export interface HardwareSizingState {
@@ -29,6 +31,8 @@ export interface HardwareSizingState {
   /** Restrict the search to one vendor group; undefined = all vendors. */
   vendor?: GpuVendor;
   offloadEnabled: boolean;
+  /** How to order qualifying rows; see HardwareSizingSort. */
+  sort: HardwareSizingSort;
 }
 
 export const DEFAULT_HARDWARE_SIZING: HardwareSizingState = {
@@ -40,6 +44,7 @@ export const DEFAULT_HARDWARE_SIZING: HardwareSizingState = {
   runtime: 'generic',
   minPerUserTokS: 20,
   offloadEnabled: false,
+  sort: 'smallest',
 };
 
 export interface PlannerState {
@@ -101,6 +106,7 @@ const PH = {
   maxTtftSeconds: 'phtt',
   vendor: 'phv',
   offloadEnabled: 'phof',
+  sort: 'phs',
 } as const;
 
 /** Writes `state`'s fields onto `params` under the `ph` prefix; a no-op when `state` is undefined. */
@@ -117,6 +123,7 @@ export function encodeHardwareSizingParams(params: URLSearchParams, state: Hardw
   if (state.maxTtftSeconds !== undefined) params.set(PH.maxTtftSeconds, String(state.maxTtftSeconds));
   if (state.vendor !== undefined) params.set(PH.vendor, state.vendor);
   params.set(PH.offloadEnabled, state.offloadEnabled ? '1' : '0');
+  params.set(PH.sort, state.sort);
 }
 
 /**
@@ -148,6 +155,7 @@ export function decodeHardwareSizingState(qs: string): HardwareSizingState | und
     runtime: oneOf(PH.runtime, RUNTIME_KEYS, DEFAULT_HARDWARE_SIZING.runtime),
     minPerUserTokS: num(PH.minPerUserTokS, DEFAULT_HARDWARE_SIZING.minPerUserTokS),
     offloadEnabled: q.get(PH.offloadEnabled) === '1',
+    sort: oneOf(PH.sort, HARDWARE_SIZING_SORTS, DEFAULT_HARDWARE_SIZING.sort),
   };
   const modelId = q.get(PH.modelId);
   if (modelId !== null) result.modelId = modelId;

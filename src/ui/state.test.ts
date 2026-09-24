@@ -227,4 +227,45 @@ describe('reducer: loadPartial (openInCalculator handoff)', () => {
     expect(s.model.id).toBe(llama8b.id);
     expect(s.quant.weight).not.toBeUndefined();
   });
+
+  // Regression: a Planner "Use" (which never carries its own speculative config) must not leave
+  // a speculative draft set for a previous model/hardware combo silently attached to the new one.
+  it('a model+hardware patch clears a previously-set speculative config', () => {
+    const before: CalcState = {
+      ...defaultState,
+      speculative: { enabled: true, draftMode: 'custom', draftParams: 8e9, draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 },
+    };
+    const patch = {
+      model: llama8b,
+      hardware: { gpuName: 'H100 SXM', gpuCount: 2, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 5, overheadGB: 1 },
+      workload: { contextTokens: 4096, concurrentUsers: 8 },
+      runtime: 'vllm' as const,
+    };
+    const s = reducer(before, { type: 'loadPartial', patch });
+    expect(s.speculative).toBeUndefined();
+
+    // calculate() on the resulting Calculator state agrees exactly with calculate() run directly
+    // on the patch alone (no speculation) — the stale draft has zero effect on the numbers.
+    const full: CalcState = { model: patch.model, quant: s.quant, hardware: patch.hardware, workload: patch.workload, runtime: patch.runtime };
+    expect(calculate(s)).toEqual(calculate(full));
+  });
+
+  it('a patch that carries its own speculative config replaces the old one wholesale', () => {
+    const before: CalcState = {
+      ...defaultState,
+      speculative: { enabled: true, draftMode: 'custom', draftParams: 8e9, draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 },
+    };
+    const newSpeculative = { enabled: true, draftMode: 'custom' as const, draftParams: 1e9, draftWeightQuant: 'q8_0' as const, k: 5, alpha: 0.8 };
+    const s = reducer(before, { type: 'loadPartial', patch: { model: llama8b, speculative: newSpeculative } });
+    expect(s.speculative).toEqual(newSpeculative);
+  });
+
+  it('a patch touching neither model nor hardware leaves speculative untouched', () => {
+    const before: CalcState = {
+      ...defaultState,
+      speculative: { enabled: true, draftMode: 'custom', draftParams: 8e9, draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 },
+    };
+    const s = reducer(before, { type: 'loadPartial', patch: { runtime: 'vllm' } });
+    expect(s.speculative).toBe(before.speculative);
+  });
 });

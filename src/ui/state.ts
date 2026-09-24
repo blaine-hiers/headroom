@@ -58,7 +58,7 @@ export function maxContextFor(model: ModelSpec): number {
  * `openInCalculator` in App.tsx. Each field replaces that whole slice of state, same as loading
  * a model or applying a hardware-finder result does today — it is not a deep-merge patch.
  */
-export type OpenInCalculatorPatch = Partial<Pick<CalcState, 'model' | 'quant' | 'hardware' | 'workload' | 'runtime'>>;
+export type OpenInCalculatorPatch = Partial<Pick<CalcState, 'model' | 'quant' | 'hardware' | 'workload' | 'runtime' | 'speculative'>>;
 
 export type Action =
   | { type: 'loadModel'; spec: ModelSpec }
@@ -141,6 +141,12 @@ export function reducer(state: CalcState, action: Action): CalcState {
       if (patch.hardware !== undefined) next = { ...next, hardware: { ...patch.hardware } };
       if (patch.workload !== undefined) next = reducer(next, { type: 'workload', patch: patch.workload });
       if (patch.runtime !== undefined) next = { ...next, runtime: patch.runtime };
+      // A new model or hardware invalidates whatever speculative config was set for the old
+      // one (a draft model sized for a different target, or a draft that no longer makes sense
+      // on different hardware) — whole-replace it with whatever the patch carries, undefined
+      // (off) when it carries none. Planner rows are always computed without speculation, so
+      // "Use" always lands on a Calculator that agrees with the row it came from.
+      if (patch.model !== undefined || patch.hardware !== undefined) next = { ...next, speculative: patch.speculative };
       return next;
     }
   }

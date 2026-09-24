@@ -105,22 +105,46 @@ describe('rankHardwareSizingRows', () => {
     };
   }
 
-  it('sorts priced rows by price ascending', () => {
-    const cheap = row({ cost: { costPerHour: 1, atCurrentUsers: undefined, atMaxUsers: undefined } });
-    const pricey = row({ cost: { costPerHour: 5, atCurrentUsers: undefined, atMaxUsers: undefined } });
-    expect(rankHardwareSizingRows([pricey, cheap])).toEqual([cheap, pricey]);
+  describe("'smallest' (the default)", () => {
+    it('sorts by total VRAM ascending regardless of price', () => {
+      const small = row({ totalVramGB: 24 });
+      const big = row({ totalVramGB: 96 });
+      expect(rankHardwareSizingRows([big, small])).toEqual([small, big]);
+      expect(rankHardwareSizingRows([big, small], 'smallest')).toEqual([small, big]);
+    });
+
+    it('never buries a small unpriced GPU under a big priced one (the review regression)', () => {
+      // A single unpriced-but-owned RTX 4090 vs an 8x H100 cluster with a known cloud rate.
+      const single4090 = row({ totalVramGB: 24 });
+      const h100Cluster = row({ totalVramGB: 640, cost: { costPerHour: 26, atCurrentUsers: undefined, atMaxUsers: undefined } });
+      expect(rankHardwareSizingRows([h100Cluster, single4090], 'smallest')).toEqual([single4090, h100Cluster]);
+    });
+
+    it('breaks a VRAM tie by $/hour when both rows have one', () => {
+      const cheap = row({ totalVramGB: 80, cost: { costPerHour: 1, atCurrentUsers: undefined, atMaxUsers: undefined } });
+      const pricey = row({ totalVramGB: 80, cost: { costPerHour: 5, atCurrentUsers: undefined, atMaxUsers: undefined } });
+      expect(rankHardwareSizingRows([pricey, cheap], 'smallest')).toEqual([cheap, pricey]);
+    });
   });
 
-  it('sorts unpriced rows by total VRAM ascending', () => {
-    const small = row({ totalVramGB: 24 });
-    const big = row({ totalVramGB: 96 });
-    expect(rankHardwareSizingRows([big, small])).toEqual([small, big]);
-  });
+  describe("'cheapest'", () => {
+    it('sorts priced rows by price ascending', () => {
+      const cheap = row({ cost: { costPerHour: 1, atCurrentUsers: undefined, atMaxUsers: undefined } });
+      const pricey = row({ cost: { costPerHour: 5, atCurrentUsers: undefined, atMaxUsers: undefined } });
+      expect(rankHardwareSizingRows([pricey, cheap], 'cheapest')).toEqual([cheap, pricey]);
+    });
 
-  it('puts every priced row ahead of every unpriced row', () => {
-    const unpriced = row({ totalVramGB: 24 });
-    const priced = row({ totalVramGB: 999, cost: { costPerHour: 100, atCurrentUsers: undefined, atMaxUsers: undefined } });
-    expect(rankHardwareSizingRows([unpriced, priced])).toEqual([priced, unpriced]);
+    it('sorts unpriced rows by total VRAM ascending', () => {
+      const small = row({ totalVramGB: 24 });
+      const big = row({ totalVramGB: 96 });
+      expect(rankHardwareSizingRows([big, small], 'cheapest')).toEqual([small, big]);
+    });
+
+    it('puts every priced row ahead of every unpriced row', () => {
+      const unpriced = row({ totalVramGB: 24 });
+      const priced = row({ totalVramGB: 999, cost: { costPerHour: 100, atCurrentUsers: undefined, atMaxUsers: undefined } });
+      expect(rankHardwareSizingRows([unpriced, priced], 'cheapest')).toEqual([priced, unpriced]);
+    });
   });
 });
 
@@ -135,9 +159,15 @@ describe('sizeHardware', () => {
     }
   });
 
-  it('qualifying rows are ranked cheapest/smallest first', () => {
+  it("qualifying rows default to 'smallest' (total VRAM ascending) regardless of price", () => {
     const tiny = makeSpec({ params: 1e9, activeParams: 1e9 });
     const { qualifying } = sizeHardware(tiny, { contextTokens: 8192, concurrentUsers: 4 }, { ...baseOptions, minPerUserTokS: 1 });
+    for (let i = 1; i < qualifying.length; i++) expect(qualifying[i].totalVramGB).toBeGreaterThanOrEqual(qualifying[i - 1].totalVramGB);
+  });
+
+  it("options.sort: 'cheapest' ranks priced rows by $/hour ahead of unpriced rows by VRAM", () => {
+    const tiny = makeSpec({ params: 1e9, activeParams: 1e9 });
+    const { qualifying } = sizeHardware(tiny, { contextTokens: 8192, concurrentUsers: 4 }, { ...baseOptions, minPerUserTokS: 1, sort: 'cheapest' });
     const priced = qualifying.filter((r) => r.cost !== undefined);
     const unpriced = qualifying.filter((r) => r.cost === undefined);
     for (let i = 1; i < priced.length; i++) expect(priced[i].cost!.costPerHour).toBeGreaterThanOrEqual(priced[i - 1].cost!.costPerHour);

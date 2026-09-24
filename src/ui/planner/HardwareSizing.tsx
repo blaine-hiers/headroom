@@ -15,7 +15,7 @@ import {
   sizeHardware,
   WEIGHT_QUANTS,
 } from '../../lib';
-import type { GpuVendor, HardwareSizingOptions, HardwareSizingRow, KvQuantKey, ModelSpec, RuntimeKey, WeightQuantKey } from '../../lib';
+import type { GpuVendor, HardwareSizingOptions, HardwareSizingRow, HardwareSizingSort, KvQuantKey, ModelSpec, RuntimeKey, WeightQuantKey } from '../../lib';
 import { Bytes } from '../Bytes';
 import { NumberField } from '../NumberField';
 import type { OpenInCalculatorPatch } from '../state';
@@ -99,6 +99,7 @@ export function HardwareSizing({ planner, dispatch, openInCalculator, calculator
   const kvQuantId = useId();
   const runtimeId = useId();
   const vendorId = useId();
+  const sortId = useId();
 
   function commitModelText(text: string) {
     const match = findModelPreset(text);
@@ -118,8 +119,9 @@ export function HardwareSizing({ planner, dispatch, openInCalculator, calculator
       maxTtftSeconds: hs.maxTtftSeconds,
       vendor: hs.vendor,
       offload: hs.offloadEnabled ? { enabled: true, systemRamGB: DEFAULT_OFFLOAD.systemRamGB, ramBandwidthGBs: DEFAULT_OFFLOAD.ramBandwidthGBs } : undefined,
+      sort: hs.sort,
     }),
-    [hs.weightQuant, hs.kvQuant, hs.runtime, hs.minPerUserTokS, hs.maxTtftSeconds, hs.vendor, hs.offloadEnabled],
+    [hs.weightQuant, hs.kvQuant, hs.runtime, hs.minPerUserTokS, hs.maxTtftSeconds, hs.vendor, hs.offloadEnabled, hs.sort],
   );
 
   const load = useMemo(() => ({ contextTokens: hs.contextTokens, concurrentUsers: hs.concurrentUsers }), [hs.contextTokens, hs.concurrentUsers]);
@@ -276,6 +278,14 @@ export function HardwareSizing({ planner, dispatch, openInCalculator, calculator
         Allow CPU/RAM offload for layers that don't fit
       </label>
 
+      <div className="field">
+        <label htmlFor={sortId}>Sort qualifying rows by</label>
+        <select id={sortId} value={hs.sort} onChange={(e) => patch({ sort: e.target.value as HardwareSizingSort })}>
+          <option value="smallest">Smallest first (total VRAM)</option>
+          <option value="cheapest">Cheapest cloud $/hr</option>
+        </select>
+      </div>
+
       {qualifying.length === 0 && nearMisses.length === 0 ? (
         <p className="muted">Nothing in the bundled GPU table fits at 1, 2, 4 or 8 GPUs for this model, quant and workload.</p>
       ) : (
@@ -307,7 +317,10 @@ export function HardwareSizing({ planner, dispatch, openInCalculator, calculator
         </div>
       )}
       <p className="help">
-        Ranked by $/hour where a price is listed, otherwise by total VRAM. Dimmed rows are near-misses shown with why they fall short.
+        {hs.sort === 'cheapest'
+          ? 'Ranked by $/hour where a price is listed, otherwise by total VRAM.'
+          : 'Ranked by total VRAM, smallest first, regardless of price.'}{' '}
+        Dimmed rows are near-misses shown with why they fall short.
       </p>
 
       <div className="table-wrap">

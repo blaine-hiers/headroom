@@ -22,7 +22,19 @@ export interface HardwareSizingOptions {
   vendor?: GpuVendor;
   /** CPU/RAM layer offload for the candidates; omitted/disabled = off, matching the Calculator's default. */
   offload?: OffloadSpec;
+  /** How to order qualifying rows; omitted = 'smallest' (see rankHardwareSizingRows). */
+  sort?: HardwareSizingSort;
 }
+
+/**
+ * 'smallest' (the default): total VRAM ascending, ties broken by $/hour where both rows have
+ * one. This is the personal-tool-friendly default — it never buries a qualifying, possibly
+ * already-owned single GPU under a priced multi-GPU cluster just because the cluster has a
+ * known cloud rate and the single GPU doesn't.
+ * 'cheapest': priced rows by $/hour ascending, then unpriced rows by total VRAM ascending —
+ * useful once you're actually comparing cloud rental cost.
+ */
+export type HardwareSizingSort = 'smallest' | 'cheapest';
 
 export interface HardwareSizingRow {
   gpu: GpuPreset;
@@ -114,19 +126,25 @@ export function evaluateHardwareSizingRow(result: CalcResult, options: HardwareS
   return { qualifies: true, gap: 0 };
 }
 
-/**
- * Cheapest-or-smallest first: rows with a listed $/hour sort by price ascending; the rest sort
- * by total VRAM ascending. Priced rows sort ahead of unpriced ones — a known cost beats an
- * unknown one when both otherwise qualify.
- */
-export function rankHardwareSizingRows(rows: readonly HardwareSizingRow[]): HardwareSizingRow[] {
-  return [...rows].sort((a, b) => {
-    const aPriced = a.cost !== undefined;
-    const bPriced = b.cost !== undefined;
-    if (aPriced && bPriced) return a.cost!.costPerHour - b.cost!.costPerHour;
-    if (aPriced !== bPriced) return aPriced ? -1 : 1;
-    return a.totalVramGB - b.totalVramGB;
-  });
+/** See HardwareSizingSort for what each mode means. */
+export function rankHardwareSizingRows(rows: readonly HardwareSizingRow[], sort: HardwareSizingSort = 'smallest'): HardwareSizingRow[] {
+  const sorted = [...rows];
+  if (sort === 'cheapest') {
+    sorted.sort((a, b) => {
+      const aPriced = a.cost !== undefined;
+      const bPriced = b.cost !== undefined;
+      if (aPriced && bPriced) return a.cost!.costPerHour - b.cost!.costPerHour;
+      if (aPriced !== bPriced) return aPriced ? -1 : 1;
+      return a.totalVramGB - b.totalVramGB;
+    });
+  } else {
+    sorted.sort((a, b) => {
+      if (a.totalVramGB !== b.totalVramGB) return a.totalVramGB - b.totalVramGB;
+      if (a.cost !== undefined && b.cost !== undefined) return a.cost.costPerHour - b.cost.costPerHour;
+      return 0; // stable: keeps GPU_PRESETS order for a tie neither rule breaks
+    });
+  }
+  return sorted;
 }
 
 /**
@@ -171,7 +189,7 @@ export function sizeHardware(model: ModelSpec, load: HardwareSizingLoad, options
     if (!qualified && bestMiss) rows.push(bestMiss);
   }
 
-  const qualifying = rankHardwareSizingRows(rows.filter((r) => r.qualifies));
+  const qualifying = rankHardwareSizingRows(rows.filter((r) => r.qualifies), options.sort);
   const nearMisses = rows
     .filter((r) => !r.qualifies)
     .sort((a, b) => a.gap - b.gap)

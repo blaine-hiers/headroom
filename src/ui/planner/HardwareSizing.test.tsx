@@ -47,6 +47,18 @@ describe('HardwareSizing', () => {
     expect(result.throughput.perUserTokS).toBeGreaterThanOrEqual(20);
   });
 
+  it('defaults the sort control to "Smallest first" and lets it switch to "Cheapest cloud $/hr"', async () => {
+    const user = userEvent.setup();
+    render(<Harness openInCalculator={vi.fn()} />);
+    const sortSelect = screen.getByLabelText('Sort qualifying rows by') as HTMLSelectElement;
+    expect(sortSelect).toHaveValue('smallest');
+    expect(screen.getByText(/Ranked by total VRAM, smallest first, regardless of price/)).toBeInTheDocument();
+
+    await user.selectOptions(sortSelect, 'cheapest');
+    expect(sortSelect).toHaveValue('cheapest');
+    expect(screen.getByText(/Ranked by \$\/hour where a price is listed/)).toBeInTheDocument();
+  });
+
   it('shows a note when the model was handed over from step 1', () => {
     function HandoffHarness({ openInCalculator }: { openInCalculator: (patch: OpenInCalculatorPatch) => void }) {
       const [planner, dispatch] = useReducer(plannerReducer, { handoffModelId: 'meta-llama/Llama-3.3-70B-Instruct' });

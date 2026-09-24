@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { encodeState } from '../lib';
+import { encodeState, formatBytes, formatNumber, formatTokens, MODEL_PRESETS, sizeHardware } from '../lib';
 import type { CalcState } from '../lib';
 import qwenApi from '../lib/__fixtures__/qwen2.5-7b-instruct.api.json';
 import qwenConfig from '../lib/__fixtures__/qwen2.5-7b-instruct.json';
@@ -559,5 +559,42 @@ describe('Tabs (#21)', () => {
     await user.click(screen.getByRole('tab', { name: 'Planner' }));
     await user.click(screen.getByRole('tab', { name: 'Calculator' }));
     expect(screen.getByLabelText('Context tokens', { exact: true })).toHaveValue(32768);
+  });
+
+  it('Planner "Use" clears a stale Calculator speculative config so the Calculator agrees with the row (#25 review)', async () => {
+    const user = userEvent.setup();
+    // Seed the Calculator with speculative decoding on for a model/hardware combo the Planner
+    // will replace — a stale draft config must not survive "Use" and change the numbers.
+    const seeded: CalcState = {
+      ...defaultState,
+      speculative: { enabled: true, draftMode: 'custom', draftParams: 8e9, draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 },
+    };
+    window.history.replaceState(null, '', `/?${encodeState(seeded)}`);
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Planner' }));
+    const useButtons = await screen.findAllByRole('button', { name: 'Use' });
+    await user.click(useButtons[0]);
+    await user.click(screen.getByRole('tab', { name: 'Calculator' }));
+
+    // Independently compute what "Use" should have produced, from HardwareSizing's own defaults
+    // (no handoff/Calculator-model override: MODEL_PRESETS[0], 32 users, 8K context, q4_k_m/fp16,
+    // generic runtime, 20 tok/s floor) — the same call HardwareSizing.tsx makes.
+    const { qualifying } = sizeHardware(
+      MODEL_PRESETS[0],
+      { contextTokens: 8192, concurrentUsers: 32 },
+      { quant: { weight: 'q4_k_m', kv: 'fp16' }, runtime: 'generic', minPerUserTokS: 20 },
+    );
+    const expected = qualifying[0];
+    expect(expected).toBeDefined();
+    // The row itself was never computed with speculation on.
+    expect(expected.result.speculative.enabled).toBe(false);
+
+    const headroom = document.querySelector<HTMLElement>('.verdict-detail .bytes-dec');
+    expect(headroom?.textContent).toBe(formatBytes(expected.result.runHeadroomBytes));
+
+    const maxUsersHeading = screen.getByText(`Max users at ${formatTokens(8192)}`);
+    const maxUsersValue = maxUsersHeading.parentElement?.querySelector('.big');
+    expect(maxUsersValue?.textContent).toBe(formatNumber(expected.result.maxUsersAtContext));
   });
 });
