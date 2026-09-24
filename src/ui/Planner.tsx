@@ -1,4 +1,5 @@
 import type { Dispatch } from 'react';
+import type { ModelSpec } from '../lib';
 import type { OpenInCalculatorPatch } from './state';
 import { HardwareSizing } from './planner/HardwareSizing';
 import type { PlannerAction, PlannerState } from './planner/plannerState';
@@ -9,6 +10,8 @@ interface Props {
   dispatch: Dispatch<PlannerAction>;
   /** Loads a partial config into the Calculator's primary column and switches to it. */
   openInCalculator: (patch: OpenInCalculatorPatch) => void;
+  /** The Calculator's current primary-column model, for HardwareSizing's "use the Calculator's model" option (#25). */
+  calculatorModel?: ModelSpec;
 }
 
 /**
@@ -17,12 +20,12 @@ interface Props {
  * without touching this file or each other. `.planner-toolbar` is the obvious slot #26's Clear
  * button goes in.
  */
-export function Planner({ planner, dispatch, openInCalculator }: Props) {
+export function Planner({ planner, dispatch, openInCalculator, calculatorModel }: Props) {
   return (
     <div className="planner">
       <div className="planner-toolbar" />
       <TaskPicker planner={planner} dispatch={dispatch} openInCalculator={openInCalculator} />
-      <HardwareSizing planner={planner} dispatch={dispatch} openInCalculator={openInCalculator} />
+      <HardwareSizing planner={planner} dispatch={dispatch} openInCalculator={openInCalculator} calculatorModel={calculatorModel} />
     </div>
   );
 }

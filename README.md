@@ -18,6 +18,8 @@ It runs entirely in the browser. There is no backend and no account. The whole c
 
 The page has two tabs, **Calculator** and **Planner**. Calculator is everything above. Planner is a growing home for planning tools that hand their result to the Calculator: which model fits a task, then what hardware serves it for N users. The active tab is `?tab=planner` in the URL (Calculator is the default, so it's never written for a plain calculator link); each tab keeps its own state, so switching tabs and back loses nothing.
 
+Planner's step 2, **"What hardware do I need to serve N users?"**, takes one model (typed in, picked from the catalog, handed over from step 1, or the Calculator's current model), a user count, a context per user, a weight quant/KV dtype, a runtime profile, a minimum per-user decode tok/s and an optional max TTFT, then searches the same GPU-preset × {1, 2, 4, 8} space as *Which hardware fits?* for every candidate that runs at that load, passes the tensor-parallel split check, and meets the tok/s and TTFT targets. Qualifying rows are ranked cheapest-$/hour-first (or smallest-VRAM-first where no price is listed); a few close-but-failing rows are shown dimmed with why ("short 6 GB", "14 tok/s < 20", "TP split invalid"). Each qualifying row's **Use** button opens the Calculator with that exact model/hardware/runtime/workload. A small strip below shows the smallest qualifying option at 1, 4, 16, 64 and 256 users, for a quick read on how the choice scales. Its inputs are saved in the URL under `ph`-prefixed keys once the panel is touched; the math lives in `src/lib/hardwareSizing.ts`.
+
 **Live:** https://blaine-hiers.github.io/headroom/
 
 ![screenshot](docs/screenshot.png)

@@ -20,6 +20,7 @@ export * from './hfFiles';
 export * from './runtime';
 export * from './launchCommand';
 export * from './hardwareFinder';
+export * from './hardwareSizing';
 export * from './compare';
 export * from './tabState';
 export * from './exportMarkdown';

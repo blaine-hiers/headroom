@@ -6,7 +6,8 @@ import { HardwareFinder } from './HardwareFinder';
 import { HardwarePanel } from './HardwarePanel';
 import { Header } from './Header';
 import { ModelPanel } from './ModelPanel';
-import { initialPlannerState, plannerReducer } from './planner/plannerState';
+import { decodeHardwareSizingState, encodeHardwareSizingParams, initialPlannerState, plannerReducer } from './planner/plannerState';
+import type { HardwareSizingState } from './planner/plannerState';
 import { Planner } from './Planner';
 import { QuantPanel } from './QuantPanel';
 import { Results } from './Results';
@@ -18,15 +19,16 @@ import { WorkloadPanel } from './WorkloadPanel';
 
 const URL_DEBOUNCE_MS = 250;
 
-function urlFor(columns: readonly CalcState[], tab: TabKey): string {
+function urlFor(columns: readonly CalcState[], tab: TabKey, hardwareSizing: HardwareSizingState | undefined): string {
   const params = new URLSearchParams(encodeCompareState(columns));
   setTabParam(params, tab);
+  encodeHardwareSizingParams(params, hardwareSizing);
   return `${window.location.pathname}?${params.toString()}`;
 }
 
-function writeUrl(columns: readonly CalcState[], tab: TabKey): void {
+function writeUrl(columns: readonly CalcState[], tab: TabKey, hardwareSizing: HardwareSizingState | undefined): void {
   try {
-    window.history.replaceState(null, '', urlFor(columns, tab));
+    window.history.replaceState(null, '', urlFor(columns, tab, hardwareSizing));
   } catch {
     // history can throw in sandboxed frames; the link just will not update
   }
@@ -45,8 +47,14 @@ export default function App() {
   const [selected, setSelected] = useState(0); // 0 = primary state, n = extraColumns[n - 1]
   const [tab, setTab] = useState<TabKey>(() => decodeTab(window.location.search));
   // Its own reducer, deliberately separate from the Calculator's: switching tabs never touches
-  // or resets this, so Calculator -> Planner -> Calculator round-trips both untouched.
-  const [planner, plannerDispatch] = useReducer(plannerReducer, initialPlannerState);
+  // or resets this, so Calculator -> Planner -> Calculator round-trips both untouched. The
+  // hardwareSizing slice (#25) is the only part of Planner state read back from the URL so far;
+  // it decodes to undefined (initialPlannerState unchanged) for every link written before step 2
+  // existed, including old c2/c3 compare links.
+  const [planner, plannerDispatch] = useReducer(plannerReducer, undefined, () => {
+    const hardwareSizing = decodeHardwareSizingState(window.location.search);
+    return hardwareSizing ? { ...initialPlannerState, hardwareSizing } : initialPlannerState;
+  });
 
   const columns = useMemo(() => [state, ...extraColumns], [state, extraColumns]);
   const activeState = columns[selected] ?? state;
@@ -65,14 +73,14 @@ export default function App() {
   const activeResult = results[selected] ?? results[0];
 
   useEffect(() => {
-    const t = window.setTimeout(() => writeUrl(columns, tab), URL_DEBOUNCE_MS);
+    const t = window.setTimeout(() => writeUrl(columns, tab, planner.hardwareSizing), URL_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
-  }, [columns, tab]);
+  }, [columns, tab, planner.hardwareSizing]);
 
   const getLink = useCallback(() => {
-    writeUrl(columns, tab);
-    return `${window.location.origin}${urlFor(columns, tab)}`;
-  }, [columns, tab]);
+    writeUrl(columns, tab, planner.hardwareSizing);
+    return `${window.location.origin}${urlFor(columns, tab, planner.hardwareSizing)}`;
+  }, [columns, tab, planner.hardwareSizing]);
 
   /** Lets another tab (the Planner's "use this" actions) load a config into the Calculator's
    *  primary column and switch to it. Always targets the primary column, never whatever compare
@@ -171,7 +179,7 @@ export default function App() {
         </main>
       </div>
       <div id="tabpanel-planner" role="tabpanel" aria-labelledby="tab-planner" hidden={tab !== 'planner'}>
-        <Planner planner={planner} dispatch={plannerDispatch} openInCalculator={openInCalculator} />
+        <Planner planner={planner} dispatch={plannerDispatch} openInCalculator={openInCalculator} calculatorModel={state.model} />
       </div>
       <footer className="footer muted">
         Model data from the Hugging Face Hub (config.json + safetensors parameter count, repo file sizes, GGUF headers) or built-in presets.

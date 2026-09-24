@@ -755,6 +755,15 @@ tr.over-max td {
   color: var(--muted);
 }
 
+tr.hwsizing-dim {
+  opacity: 0.55;
+}
+
+.scaling-strip-caption {
+  text-align: left;
+  caption-side: top;
+}
+
 tr.over-max .tag {
   color: var(--muted);
 }
