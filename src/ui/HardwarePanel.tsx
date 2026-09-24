@@ -61,6 +61,16 @@ export function HardwarePanel({ hardware, onChange }: Props) {
           onChange={(v) => onChange({ bandwidthGBs: v })}
         />
       </div>
+      <NumberField
+        label="Compute per GPU (BF16)"
+        suffix="TFLOPS"
+        value={hardware.tflopsBf16}
+        min={0.1}
+        max={100000}
+        step={0.1}
+        onChange={(v) => onChange({ tflopsBf16: v })}
+        help="Dense tensor TFLOPS, no sparsity. Used for the prefill/time-to-first-token estimate."
+      />
       <Stepper
         label="GPU count"
         value={hardware.gpuCount}

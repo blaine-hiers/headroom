@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeSpec } from './__fixtures__/makeSpec';
+import { findGpuPreset } from './presets/gpus';
 import { MODEL_PRESETS } from './presets/models';
 import type { CalcState } from './types';
 import { decodeState, encodeState } from './urlState';
@@ -8,7 +9,7 @@ import { activeParamsDetailed } from './weights';
 const fallback: CalcState = {
   model: makeSpec(),
   quant: { weight: 'bf16', kv: 'fp16' },
-  hardware: { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, reservePct: 5, overheadGB: 1 },
+  hardware: { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, tflopsBf16: 165.0, reservePct: 5, overheadGB: 1 },
   workload: { contextTokens: 8192, concurrentUsers: 1 },
 };
 
@@ -18,7 +19,7 @@ describe('urlState', () => {
       const s: CalcState = {
         model,
         quant: { weight: 'q4_k_m', kv: 'fp8' },
-        hardware: { gpuName: 'H100 SXM', gpuCount: 8, vramGB: 80, bandwidthGBs: 3350, reservePct: 7.5, overheadGB: 1.25 },
+        hardware: { gpuName: 'H100 SXM', gpuCount: 8, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 7.5, overheadGB: 1.25 },
         workload: { contextTokens: 32768, concurrentUsers: 16 },
       };
       const qs = encodeState(s);
@@ -59,7 +60,7 @@ describe('urlState', () => {
   it('round-trips Apple wired-memory limit override', () => {
     const s: CalcState = {
       ...fallback,
-      hardware: { gpuName: 'Apple M2 Ultra', gpuCount: 1, vramGB: 192, bandwidthGBs: 800, reservePct: 5, overheadGB: 1, appleWiredLimitGB: 120 },
+      hardware: { gpuName: 'Apple M2 Ultra', gpuCount: 1, vramGB: 192, bandwidthGBs: 800, tflopsBf16: 100, reservePct: 5, overheadGB: 1, appleWiredLimitGB: 120 },
     };
     expect(decodeState(encodeState(s), fallback)).toEqual(s);
   });
@@ -67,7 +68,7 @@ describe('urlState', () => {
   it('omits Apple wired-memory limit when undefined', () => {
     const s: CalcState = {
       ...fallback,
-      hardware: { gpuName: 'Apple M2 Ultra', gpuCount: 1, vramGB: 192, bandwidthGBs: 800, reservePct: 5, overheadGB: 1 },
+      hardware: { gpuName: 'Apple M2 Ultra', gpuCount: 1, vramGB: 192, bandwidthGBs: 800, tflopsBf16: 100, reservePct: 5, overheadGB: 1 },
     };
     const qs = encodeState(s);
     expect(qs).not.toContain('awl');
@@ -79,18 +80,37 @@ describe('urlState', () => {
     // The awl param in the URL is still there, but should be ignored since H100 is non-Apple
     const appleState: CalcState = {
       ...fallback,
-      hardware: { gpuName: 'Apple M2 Ultra', gpuCount: 1, vramGB: 192, bandwidthGBs: 800, reservePct: 5, overheadGB: 1, appleWiredLimitGB: 120 },
+      hardware: { gpuName: 'Apple M2 Ultra', gpuCount: 1, vramGB: 192, bandwidthGBs: 800, tflopsBf16: 100, reservePct: 5, overheadGB: 1, appleWiredLimitGB: 120 },
     };
     const qs = encodeState(appleState);
     // Now decode with H100 as the GPU instead
     const nonAppleState: CalcState = {
       ...fallback,
-      hardware: { gpuName: 'H100 SXM', gpuCount: 1, vramGB: 80, bandwidthGBs: 3350, reservePct: 5, overheadGB: 1, appleWiredLimitGB: 120 },
+      hardware: { gpuName: 'H100 SXM', gpuCount: 1, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 100, reservePct: 5, overheadGB: 1, appleWiredLimitGB: 120 },
     };
     const decoded = decodeState(qs, nonAppleState);
     // The awl param is preserved in the URL state, but effectiveVramGB will ignore it for non-Apple GPUs
     // (In the UI, HardwarePanel clears it when switching GPU selection)
     expect(decoded.hardware.appleWiredLimitGB).toBe(120);
+  });
+
+  it('an old link without tflopsBf16 (issue #11) still decodes, from the named GPU preset', () => {
+    // fallback's gpuName is a known preset (RTX 4090), so the missing "tf" param should read
+    // the preset's own TFLOPS rather than a generic default — an old H100 link should not show
+    // an RTX-4090-speed TTFT.
+    const qs = encodeState(fallback).replace(/&?tf=[^&]*/, '');
+    expect(qs).not.toContain('tf=');
+    const decoded = decodeState(qs, fallback);
+    expect(decoded).not.toBe(fallback);
+    expect(decoded.hardware.tflopsBf16).toBe(findGpuPreset('RTX 4090')?.tflopsBf16);
+    expect(decoded).toEqual(fallback);
+  });
+
+  it('an old link for an unknown/custom GPU name falls back to the generic default', () => {
+    const s: CalcState = { ...fallback, hardware: { ...fallback.hardware, gpuName: 'Some Future GPU' } };
+    const qs = encodeState(s).replace(/&?tf=[^&]*/, '');
+    const decoded = decodeState(qs, fallback);
+    expect(decoded.hardware.tflopsBf16).toBe(100);
   });
 
   it('bad input → fallback', () => {

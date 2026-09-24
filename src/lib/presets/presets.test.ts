@@ -29,6 +29,15 @@ describe('GPU presets', () => {
       expect(g.bandwidthGBs).toBeGreaterThan(0);
     }
   });
+
+  it('every preset has a sane dense BF16 TFLOPS figure', () => {
+    for (const g of GPU_PRESETS) {
+      expect(Number.isFinite(g.tflopsBf16), g.name).toBe(true);
+      // Bracket: below the slowest listed card (RTX 2070, 14.9) and above the fastest (B200, 2250).
+      expect(g.tflopsBf16, g.name).toBeGreaterThan(10);
+      expect(g.tflopsBf16, g.name).toBeLessThan(3000);
+    }
+  });
 });
 
 describe('model presets', () => {

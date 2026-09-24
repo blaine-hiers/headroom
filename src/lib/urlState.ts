@@ -1,3 +1,4 @@
+import { findGpuPreset } from './presets/gpus';
 import { KV_QUANTS, WEIGHT_QUANTS } from './quant';
 import type {
   Attention,
@@ -37,6 +38,7 @@ const K = {
   gpuCount: 'gc',
   vramGB: 'vr',
   bandwidthGBs: 'bw',
+  tflopsBf16: 'tf',
   reservePct: 'rp',
   overheadGB: 'oh',
   appleWiredLimitGB: 'awl',
@@ -89,6 +91,7 @@ export function encodeState(state: CalcState): string {
   set(K.gpuCount, h.gpuCount);
   set(K.vramGB, h.vramGB);
   set(K.bandwidthGBs, h.bandwidthGBs);
+  set(K.tflopsBf16, h.tflopsBf16);
   set(K.reservePct, h.reservePct);
   set(K.overheadGB, h.overheadGB);
   set(K.appleWiredLimitGB, h.appleWiredLimitGB);
@@ -207,6 +210,10 @@ export function decodeState(qs: string, fallback: CalcState): CalcState {
           gpuCount: num(K.gpuCount),
           vramGB: num(K.vramGB),
           bandwidthGBs: num(K.bandwidthGBs),
+          // New key (issue #11): links shared before the prefill estimate existed have no
+          // "tf" param. Falling back to the named GPU's own preset (when it is one) keeps an
+          // old H100 link's TTFT in the right ballpark instead of reading off a generic default.
+          tflopsBf16: optNum(K.tflopsBf16) ?? findGpuPreset(str(K.gpuName))?.tflopsBf16 ?? 100,
           reservePct: num(K.reservePct),
           overheadGB: num(K.overheadGB),
         };

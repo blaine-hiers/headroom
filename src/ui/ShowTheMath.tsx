@@ -5,6 +5,7 @@ import {
   effectiveVramGB,
   findGpuPreset,
   formatNumber,
+  formatSeconds,
   KV_QUANTS,
   kvBytesPerTokenPerLayer,
   TP_PENALTY_PER_DOUBLING,
@@ -205,6 +206,12 @@ export function ShowTheMath({ state, result }: Props) {
             </>
           }
           result={`${n(result.throughput.perUserTokS, 1)} tok/s per user, ${n(result.throughput.aggregateTokS, 1)} tok/s aggregate`}
+        />
+        <Step
+          title={`Prefill / time to first token (compute-bound, BF16${result.prefill.headsSource === 'hiddenSize-fallback' ? ', head count unknown → hiddenSize used' : ''})`}
+          formula="[2 × activeParams × C + 2 × layers × C² × queryWidth] / (tflopsBf16 × 1e12 × gpuCount × MFU)"
+          sub={`[2 × ${n(active)} × ${n(C)} + 2 × ${n(model.numLayers)} × ${n(C)}² × queryWidth] / (${n(hw.tflopsBf16, 1)} × 1e12 × ${n(hw.gpuCount)} × ${result.prefill.mfu})`}
+          result={`${n(result.prefill.flops)} FLOPs → ${formatSeconds(result.prefill.ttftSeconds)}`}
         />
       </ol>
       {hw.gpuCount > 1 && (

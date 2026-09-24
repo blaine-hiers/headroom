@@ -45,3 +45,11 @@ export function formatTokens(n: number): string {
   if (abs >= 1024) return `${Number((n / 1024).toFixed(1))}K`;
   return String(Math.round(n));
 }
+
+/** Seconds → "120 ms", "1.2 s", "3.4 min" for TTFT-scale durations. */
+export function formatSeconds(s: number): string {
+  if (!Number.isFinite(s) || s < 0) return DASH;
+  if (s < 1) return `${sig3(s * 1000)} ms`;
+  if (s < 60) return `${sig3(s)} s`;
+  return `${sig3(s / 60)} min`;
+}

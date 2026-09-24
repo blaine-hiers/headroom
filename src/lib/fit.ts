@@ -1,5 +1,6 @@
 import { resolveWeights } from './fileWeights';
 import { kvBytesForContext, kvBytesPerToken } from './kvcache';
+import { estimateTtft, prefillFlops } from './prefill';
 import { checkTensorParallelSplit, tensorParallelEfficiency } from './tensorParallel';
 import { DECODE_EFFICIENCY, decodeThroughput } from './throughput';
 import type { CalcResult, CalcState, HardwareSpec } from './types';
@@ -111,6 +112,16 @@ export function calculate(state: CalcState): CalcResult {
     efficiency: DECODE_EFFICIENCY * tensorParallelEfficiency(hardware.gpuCount),
   });
 
+  const pf = prefillFlops({
+    activeParams: active.active,
+    promptTokens: ctx,
+    numLayers: model.numLayers,
+    headDim: model.headDim,
+    numHeads: model.ffn?.numAttentionHeads,
+    hiddenSize: model.hiddenSize,
+  });
+  const ttft = estimateTtft({ flops: pf.flops, tflopsBf16: hardware.tflopsBf16, gpuCount: hardware.gpuCount });
+
   return {
     kvBytesPerToken: perToken,
     kvBytesPerRequest: perRequest,
@@ -130,5 +141,6 @@ export function calculate(state: CalcState): CalcResult {
     contextTable,
     throughput,
     tensorParallel,
+    prefill: { ttftSeconds: ttft.ttftSeconds, flops: pf.flops, mfu: ttft.mfu, headsSource: pf.headsSource },
   };
 }

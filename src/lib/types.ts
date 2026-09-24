@@ -142,6 +142,8 @@ export interface HardwareSpec {
   vramGB: number;
   /** Per GPU, GB/s. */
   bandwidthGBs: number;
+  /** Per GPU, dense (no sparsity) BF16 tensor TFLOPS; used for the prefill/TTFT estimate. */
+  tflopsBf16: number;
   /** Percent of VRAM kept free (default 5). */
   reservePct: number;
   /** Runtime/CUDA-context overhead per GPU in GB (default 1). */
@@ -186,4 +188,6 @@ export interface CalcResult {
   throughput: { perUserTokS: number; aggregateTokS: number; efficiency: number };
   /** Tensor-parallel split check for hardware.gpuCount (see tensorParallel.ts). */
   tensorParallel: TensorParallelCheck;
+  /** Prefill / time-to-first-token estimate for one user at the chosen context (compute-bound). */
+  prefill: { ttftSeconds: number; flops: number; mfu: number; headsSource: 'model' | 'hiddenSize-fallback' };
 }

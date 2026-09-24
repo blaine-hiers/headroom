@@ -43,7 +43,7 @@ describe('calculate with file weights', () => {
   const state: CalcState = {
     model: makeSpec({ fileWeights: files }),
     quant: { weight: 'q4_k_m', kv: 'fp16' },
-    hardware: { gpuName: 'H100', gpuCount: 1, vramGB: 80, bandwidthGBs: 3350, reservePct: 5, overheadGB: 1 },
+    hardware: { gpuName: 'H100', gpuCount: 1, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 100, reservePct: 5, overheadGB: 1 },
     workload: { contextTokens: 8192, concurrentUsers: 1 },
   };
 

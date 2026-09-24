@@ -6,7 +6,7 @@ import { findModelPreset } from './presets/models';
 import { tensorParallelEfficiency } from './tensorParallel';
 import type { CalcState, HardwareSpec } from './types';
 
-const h100x4: HardwareSpec = { gpuName: 'H100 SXM', gpuCount: 4, vramGB: 80, bandwidthGBs: 3350, reservePct: 5, overheadGB: 1 };
+const h100x4: HardwareSpec = { gpuName: 'H100 SXM', gpuCount: 4, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 5, overheadGB: 1 };
 
 function state(overrides: Partial<CalcState> = {}): CalcState {
   return {
@@ -64,7 +64,7 @@ describe('usableBytes with Apple wired limit', () => {
       gpuName: 'Apple M2 Ultra',
       gpuCount: 1,
       vramGB: 192,
-      bandwidthGBs: 800,
+      bandwidthGBs: 800, tflopsBf16: 100,
       reservePct: 5,
       overheadGB: 1,
     };
@@ -78,7 +78,7 @@ describe('usableBytes with Apple wired limit', () => {
       gpuName: 'Apple M4 Max',
       gpuCount: 1,
       vramGB: 32,
-      bandwidthGBs: 546,
+      bandwidthGBs: 546, tflopsBf16: 100,
       reservePct: 5,
       overheadGB: 1,
     };
@@ -92,7 +92,7 @@ describe('usableBytes with Apple wired limit', () => {
       gpuName: 'Apple M2 Ultra',
       gpuCount: 1,
       vramGB: 192,
-      bandwidthGBs: 800,
+      bandwidthGBs: 800, tflopsBf16: 100,
       reservePct: 5,
       overheadGB: 1,
       appleWiredLimitGB: 120,
@@ -107,7 +107,7 @@ describe('usableBytes with Apple wired limit', () => {
       gpuName: 'H100 SXM',
       gpuCount: 1,
       vramGB: 80,
-      bandwidthGBs: 3350,
+      bandwidthGBs: 3350, tflopsBf16: 100,
       reservePct: 5,
       overheadGB: 1,
       appleWiredLimitGB: 50,
@@ -163,6 +163,12 @@ describe('calculate', () => {
     // 4 GPUs: decode efficiency also carries the tensor-parallel communication penalty.
     expect(r.throughput.efficiency).toBeCloseTo(0.7 * tensorParallelEfficiency(4));
     expect(r.throughput.aggregateTokS).toBeCloseTo(r.throughput.perUserTokS * 4);
+    // Prefill/TTFT: makeSpec() has no ffn, so the attention term falls back to hiddenSize.
+    const expectedFlops = 2 * 70.6e9 * 8192 + 2 * 80 * 8192 * 8192 * 8192;
+    expect(r.prefill.headsSource).toBe('hiddenSize-fallback');
+    expect(r.prefill.mfu).toBe(0.4);
+    expect(r.prefill.flops).toBe(expectedFlops);
+    expect(r.prefill.ttftSeconds).toBeCloseTo(expectedFlops / (989.5e12 * 4 * 0.4), 6);
   });
 
   it('context table has 2K/8K/32K/128K, adding the chosen context sorted', () => {
@@ -175,7 +181,7 @@ describe('calculate', () => {
   });
 
   it('does not fit when weights exceed VRAM: maxUsers 0, headroom negative', () => {
-    const rtx4090: HardwareSpec = { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, reservePct: 5, overheadGB: 1 };
+    const rtx4090: HardwareSpec = { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, tflopsBf16: 165.0, reservePct: 5, overheadGB: 1 };
     const r = calculate(state({ hardware: rtx4090, workload: { contextTokens: 2048, concurrentUsers: 1 } }));
     expect(r.fits).toBe(false);
     expect(r.headroomBytes).toBeLessThan(0);
@@ -187,7 +193,7 @@ describe('calculate', () => {
   it('fits boundary: total exactly equal to usable fits', () => {
     // weights 20e9 − 4096 B, overhead 0, KV 4 B/token × 1024 tokens = 4096 B per user
     const model = makeSpec({ params: (20e9 - 4096) / 2, numLayers: 1, numKvHeads: 1, headDim: 1 });
-    const hw: HardwareSpec = { gpuName: 'x', gpuCount: 1, vramGB: 20, bandwidthGBs: 100, reservePct: 0, overheadGB: 0 };
+    const hw: HardwareSpec = { gpuName: 'x', gpuCount: 1, vramGB: 20, bandwidthGBs: 100, tflopsBf16: 100, reservePct: 0, overheadGB: 0 };
     const one = calculate(state({ model, hardware: hw, workload: { contextTokens: 1024, concurrentUsers: 1 } }));
     expect(one.totalBytes).toBe(20e9);
     expect(one.usableBytes).toBe(20e9);
@@ -200,7 +206,7 @@ describe('calculate', () => {
   });
 
   it('caps maxContext at maxPositionEmbeddings when memory is plentiful', () => {
-    const b200x8: HardwareSpec = { gpuName: 'B200', gpuCount: 8, vramGB: 192, bandwidthGBs: 8000, reservePct: 5, overheadGB: 1 };
+    const b200x8: HardwareSpec = { gpuName: 'B200', gpuCount: 8, vramGB: 192, bandwidthGBs: 8000, tflopsBf16: 2250, reservePct: 5, overheadGB: 1 };
     const model = makeSpec({ params: 8e9, maxPositionEmbeddings: 8192 });
     expect(calculate(state({ model, hardware: b200x8 })).maxContextForUsers).toBe(8192);
   });
@@ -212,7 +218,7 @@ describe('calculate', () => {
     const r = calculate({
       model,
       quant: { weight: 'bf16', kv: 'fp16' },
-      hardware: { gpuName: gpu.name, gpuCount: 1, vramGB: gpu.vramGB, bandwidthGBs: gpu.bandwidthGBs, reservePct: 5, overheadGB: 1 },
+      hardware: { gpuName: gpu.name, gpuCount: 1, vramGB: gpu.vramGB, bandwidthGBs: gpu.bandwidthGBs, tflopsBf16: gpu.tflopsBf16, reservePct: 5, overheadGB: 1 },
       workload: { contextTokens: 2048, concurrentUsers: 1 },
     });
     expect(r.throughput.perUserTokS).toBeGreaterThan(40);
