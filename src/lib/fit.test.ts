@@ -3,6 +3,7 @@ import { makeSpec } from './__fixtures__/makeSpec';
 import { calculate, effectiveVramGB, maxContext, maxUsers, overheadBytes, usableBytes } from './fit';
 import { findGpuPreset } from './presets/gpus';
 import { findModelPreset } from './presets/models';
+import { tensorParallelEfficiency } from './tensorParallel';
 import type { CalcState, HardwareSpec } from './types';
 
 const h100x4: HardwareSpec = { gpuName: 'H100 SXM', gpuCount: 4, vramGB: 80, bandwidthGBs: 3350, reservePct: 5, overheadGB: 1 };
@@ -159,7 +160,8 @@ describe('calculate', () => {
     expect(r.fits).toBe(true);
     expect(r.maxUsersAtContext).toBe(Math.floor((304e9 - 145.2e9) / 2_684_354_560));
     expect(r.maxContextForUsers).toBe(Math.min(131072, Math.floor((304e9 - 145.2e9) / (4 * 327_680))));
-    expect(r.throughput.efficiency).toBe(0.7);
+    // 4 GPUs: decode efficiency also carries the tensor-parallel communication penalty.
+    expect(r.throughput.efficiency).toBeCloseTo(0.7 * tensorParallelEfficiency(4));
     expect(r.throughput.aggregateTokS).toBeCloseTo(r.throughput.perUserTokS * 4);
   });
 
@@ -215,6 +217,58 @@ describe('calculate', () => {
     });
     expect(r.throughput.perUserTokS).toBeGreaterThan(40);
     expect(r.throughput.perUserTokS).toBeLessThan(45);
+  });
+
+  it('tensor-parallel: single GPU is never flagged and KV is unscaled', () => {
+    const model = makeSpec({ ffn: { intermediateSize: 1, numAttentionHeads: 65, tieEmbeddings: false } });
+    const r = calculate(state({ model, hardware: { ...h100x4, gpuCount: 1 } }));
+    expect(r.tensorParallel.headsDivisible).toBe(true);
+    expect(r.tensorParallel.suggestedGpuCounts).toEqual([]);
+    expect(r.tensorParallel.kvHeadsReplicated).toBe(false);
+    expect(r.kvBytesPerToken).toBe(calculate(state({ model: makeSpec(), hardware: { ...h100x4, gpuCount: 1 } })).kvBytesPerToken);
+  });
+
+  it('tensor-parallel: flags a head count that does not split evenly and suggests valid counts', () => {
+    const model = makeSpec({ ffn: { intermediateSize: 1, numAttentionHeads: 64, tieEmbeddings: false } });
+    const r = calculate(state({ model, hardware: { ...h100x4, gpuCount: 3 } }));
+    expect(r.tensorParallel.headsDivisible).toBe(false);
+    expect(r.tensorParallel.suggestedGpuCounts).toEqual([1, 2, 4, 8]);
+  });
+
+  it('tensor-parallel: an evenly-splitting head count is not flagged', () => {
+    const model = makeSpec({ ffn: { intermediateSize: 1, numAttentionHeads: 64, tieEmbeddings: false } });
+    const r = calculate(state({ model, hardware: { ...h100x4, gpuCount: 4 } }));
+    expect(r.tensorParallel.headsDivisible).toBe(true);
+  });
+
+  it('tensor-parallel: no ffn spec skips the head check without a false warning', () => {
+    const model = makeSpec({ numKvHeads: 1 }); // no ffn; numKvHeads=1 splits/replicates evenly at any gpuCount
+    const r = calculate(state({ model, hardware: { ...h100x4, gpuCount: 3 } }));
+    expect(r.tensorParallel.checkable).toBe(false);
+    expect(r.tensorParallel.headsDivisible).toBe(true);
+    expect(r.tensorParallel.suggestedGpuCounts).toEqual([]);
+  });
+
+  it('tensor-parallel: fewer KV heads than GPUs replicates KV and scales the KV total', () => {
+    const model = makeSpec({ numKvHeads: 2 });
+    const r4 = calculate(state({ model, hardware: { ...h100x4, gpuCount: 4 } }));
+    expect(r4.tensorParallel.kvHeadsReplicated).toBe(true);
+    expect(r4.tensorParallel.effectiveKvHeads).toBe(4);
+    expect(r4.tensorParallel.kvReplicationFactor).toBe(2);
+    const r1 = calculate(state({ model, hardware: { ...h100x4, gpuCount: 1 } }));
+    expect(r1.tensorParallel.kvHeadsReplicated).toBe(false);
+    expect(r4.kvBytesPerToken).toBe(r1.kvBytesPerToken * 2);
+    expect(r4.kvBytesPerRequest).toBe(r1.kvBytesPerRequest * 2);
+  });
+
+  it('tensor-parallel: MLA models are never KV-head-replicated, even with a small numKvHeads', () => {
+    const model = makeSpec({ attention: 'mla', numKvHeads: 2, kvLoraRank: 512, qkRopeHeadDim: 64 });
+    const r4 = calculate(state({ model, hardware: { ...h100x4, gpuCount: 4 } }));
+    expect(r4.tensorParallel.kvHeadsReplicated).toBe(false);
+    expect(r4.tensorParallel.kvHeadsSplitValid).toBe(true);
+    expect(r4.tensorParallel.kvReplicationFactor).toBe(1);
+    const r1 = calculate(state({ model, hardware: { ...h100x4, gpuCount: 1 } }));
+    expect(r4.kvBytesPerToken).toBe(r1.kvBytesPerToken);
   });
 
   it('MoE throughput reads only active weights', () => {

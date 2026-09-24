@@ -1,5 +1,6 @@
 import { kvBytesForContext, kvBytesPerToken } from './kvcache';
-import { decodeThroughput } from './throughput';
+import { checkTensorParallelSplit, tensorParallelEfficiency } from './tensorParallel';
+import { DECODE_EFFICIENCY, decodeThroughput } from './throughput';
 import type { CalcResult, CalcState, HardwareSpec } from './types';
 import { activeParamsDetailed, weightBytes } from './weights';
 import { findGpuPreset } from './presets/gpus';
@@ -72,8 +73,12 @@ export function calculate(state: CalcState): CalcResult {
   const users = Math.max(0, Math.floor(workload.concurrentUsers));
   const ctx = Math.max(0, Math.floor(workload.contextTokens));
 
-  const perToken = kvBytesPerToken(model, quant.kv);
-  const perRequest = kvBytesForContext(model, ctx, quant.kv);
+  // Tensor-parallel split: warns when numAttentionHeads can't divide evenly across gpuCount,
+  // and scales KV bytes up when numKvHeads < gpuCount forces KV-head replication.
+  const tensorParallel = checkTensorParallelSplit(model, hardware.gpuCount);
+  const kvReplication = tensorParallel.kvReplicationFactor;
+  const perToken = kvBytesPerToken(model, quant.kv) * kvReplication;
+  const perRequest = kvBytesForContext(model, ctx, quant.kv) * kvReplication;
   const allUsers = perRequest * users;
   const weights = weightBytes(model.params, quant.weight);
   const overhead = overheadBytes(hardware);
@@ -86,19 +91,22 @@ export function calculate(state: CalcState): CalcResult {
   const contextTable = [...contexts]
     .sort((a, b) => a - b)
     .map((c) => {
-      const kvReq = kvBytesForContext(model, c, quant.kv);
+      const kvReq = kvBytesForContext(model, c, quant.kv) * kvReplication;
       return { contextTokens: c, kvBytesPerRequest: kvReq, maxUsers: maxUsers(usable, fixed, kvReq) };
     });
 
   // Recomputed from the spec (not model.activeParams) so a manual edit stays consistent.
   const active = activeParamsDetailed(model);
   const activeWeightBytes = weightBytes(active.active, quant.weight);
+  // Multi-GPU tensor-parallel communication overhead, as a small labelled efficiency
+  // penalty per doubling of GPU count (see tensorParallel.ts). 1× at gpuCount 1.
   const throughput = decodeThroughput({
     activeWeightBytes,
     kvBytesPerRequest: perRequest,
     concurrentUsers: users,
     bandwidthGBs: hardware.bandwidthGBs,
     gpuCount: hardware.gpuCount,
+    efficiency: DECODE_EFFICIENCY * tensorParallelEfficiency(hardware.gpuCount),
   });
 
   return {
@@ -117,5 +125,6 @@ export function calculate(state: CalcState): CalcResult {
     maxContextForUsers: maxContext(usable, fixed, users, perToken, model.maxPositionEmbeddings),
     contextTable,
     throughput,
+    tensorParallel,
   };
 }

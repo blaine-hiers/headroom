@@ -24,12 +24,34 @@ const billions = (n: number) => `${formatNumber(n / 1e9, 2)}B`;
 const users = (n: number) => (Number.isFinite(n) ? formatNumber(n) : '∞');
 const tokS = (v: number) => (v > 0 && Number.isFinite(v) ? formatNumber(v, v < 10 ? 1 : 0) : '—');
 
+/** "1, 2, 4 or 8" */
+const listWithOr = (nums: number[]) =>
+  nums.length <= 1 ? (nums[0]?.toString() ?? '') : `${nums.slice(0, -1).join(', ')} or ${nums[nums.length - 1]}`;
+
+function tensorParallelWarnings(tp: CalcResult['tensorParallel'], numKvHeads: number): string[] {
+  const msgs: string[] = [];
+  // Shared across both messages: suggestions already satisfy the head-count AND KV-head checks.
+  const suggestion = tp.suggestedGpuCounts.length > 0 ? `; use ${listWithOr(tp.suggestedGpuCounts)}` : '';
+  if (tp.checkable && !tp.headsDivisible) {
+    msgs.push(`${tp.gpuCount} GPUs can't evenly split ${formatNumber(tp.numAttentionHeads ?? 0)} attention heads for tensor parallelism${suggestion}`);
+  }
+  if (tp.kvHeadsReplicated && !tp.kvHeadsSplitValid) {
+    msgs.push(`${tp.gpuCount} GPUs can't evenly split or replicate ${formatNumber(numKvHeads)} KV heads for tensor parallelism${suggestion}`);
+  } else if (tp.kvHeadsReplicated) {
+    // Not MLA (kvHeadsReplicated is always false there): fewer KV heads than GPUs still lays
+    // out evenly, but every GPU holding a full replicated head raises the per-GPU KV size.
+    msgs.push(`Fewer KV heads than GPUs: KV heads are replicated, raising per-GPU KV size ×${formatNumber(tp.kvReplicationFactor, 2)}.`);
+  }
+  return msgs;
+}
+
 export function Results({ state, result }: Props) {
   const { workload, quant, hardware, model } = state;
   const N = workload.concurrentUsers;
   const C = workload.contextTokens;
   const level = fitLevel(result.fits, result.headroomBytes, result.usableBytes);
   const fixedTooBig = result.weightBytes + result.overheadBytes > result.usableBytes;
+  const tpWarnings = tensorParallelWarnings(result.tensorParallel, model.numKvHeads);
 
   return (
     <div className="results">
@@ -55,6 +77,13 @@ export function Results({ state, result }: Props) {
             · {hardware.gpuCount} × {hardware.gpuName}, {formatNumber(N)} user{N === 1 ? '' : 's'} @ {formatTokens(C)}
           </span>
         </p>
+        {tpWarnings.length > 0 && (
+          <ul className="warnings" aria-label="Tensor-parallel notes">
+            {tpWarnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <div className="cards">
@@ -156,7 +185,10 @@ export function Results({ state, result }: Props) {
             <p className="muted">tok/s aggregate</p>
           </div>
         </div>
-        <p className="help">bandwidth-bound decode estimate, ×{result.throughput.efficiency} efficiency; prefill not included</p>
+        <p className="help">
+          bandwidth-bound decode estimate, ×{formatNumber(result.throughput.efficiency, 3)} efficiency; prefill not included
+          {hardware.gpuCount > 1 && ' (includes an estimated tensor-parallel communication penalty; see Show the math)'}
+        </p>
       </div>
 
       <Chart result={result} users={N} />
