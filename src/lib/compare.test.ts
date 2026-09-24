@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { makeSpec } from './__fixtures__/makeSpec';
 import type { CalcState } from './types';
-import { bestColumnIndex, decodeCompareColumns, encodeCompareState } from './compare';
+import { bestColumnIndex, COMPARE_ROWS, decodeCompareColumns, encodeCompareState } from './compare';
 import { decodeState, encodeState } from './urlState';
 
 const base: CalcState = {
@@ -79,5 +79,25 @@ describe('bestColumnIndex', () => {
 
   it('returns -1 when every value is non-finite', () => {
     expect(bestColumnIndex([NaN, NaN], true)).toBe(-1);
+  });
+
+  it('skips an ineligible column even when it holds the best raw value (a non-fitting column cannot win tok/s)', () => {
+    // Column 1 (index 1) has the highest throughput but doesn't fit, so it must not win.
+    expect(bestColumnIndex([100, 500, 200], true, [true, false, true])).toBe(2);
+  });
+
+  it('returns -1 when every column is ineligible', () => {
+    expect(bestColumnIndex([100, 500, 200], true, [false, false, false])).toBe(-1);
+  });
+
+  it('with no eligible column ruled out, behaves exactly like the 2-arg form', () => {
+    expect(bestColumnIndex([100, 500, 200], true, [true, true, true])).toBe(1);
+  });
+});
+
+describe('COMPARE_ROWS', () => {
+  it('only excludes non-fitting columns from winning the rows whose number assumes the model is resident', () => {
+    const excluded = COMPARE_ROWS.filter((r) => r.excludeUnfitFromBest).map((r) => r.key);
+    expect(excluded.sort()).toEqual(['maxContext', 'maxUsers', 'tokS'].sort());
   });
 });

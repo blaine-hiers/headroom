@@ -59,6 +59,13 @@ export interface CompareRowSpec {
   label: string;
   unit: 'bytes' | 'count' | 'tokens' | 'tokS';
   higherIsBetter: boolean;
+  /**
+   * True for a row whose number only means anything once the config actually loads (e.g.
+   * decode tok/s, or the max users/context that assumes the model is resident). A column that
+   * doesn't fit is excluded from winning that row — the figure is shown, just never highlighted
+   * as "better", since it isn't actually achievable on that column's hardware.
+   */
+  excludeUnfitFromBest?: boolean;
   value: (r: CalcResult) => number;
 }
 
@@ -68,18 +75,21 @@ export const COMPARE_ROWS: readonly CompareRowSpec[] = [
   { key: 'kvPerRequest', label: 'KV per request', unit: 'bytes', higherIsBetter: false, value: (r) => r.kvBytesPerRequest },
   { key: 'totalVram', label: 'Total VRAM', unit: 'bytes', higherIsBetter: false, value: (r) => r.totalBytes },
   { key: 'headroom', label: 'Headroom', unit: 'bytes', higherIsBetter: true, value: (r) => r.headroomBytes },
-  { key: 'maxUsers', label: 'Max users', unit: 'count', higherIsBetter: true, value: (r) => r.maxUsersAtContext },
-  { key: 'maxContext', label: 'Max context', unit: 'tokens', higherIsBetter: true, value: (r) => r.maxContextForUsers },
-  { key: 'tokS', label: 'Tok/s (aggregate)', unit: 'tokS', higherIsBetter: true, value: (r) => r.throughput.aggregateTokS },
+  { key: 'maxUsers', label: 'Max users', unit: 'count', higherIsBetter: true, excludeUnfitFromBest: true, value: (r) => r.maxUsersAtContext },
+  { key: 'maxContext', label: 'Max context', unit: 'tokens', higherIsBetter: true, excludeUnfitFromBest: true, value: (r) => r.maxContextForUsers },
+  { key: 'tokS', label: 'Tok/s (aggregate)', unit: 'tokS', higherIsBetter: true, excludeUnfitFromBest: true, value: (r) => r.throughput.aggregateTokS },
 ];
 
 /**
  * Index of the best value in a row, or -1 when the best is tied (nothing is highlighted, per
- * spec) or every value is NaN. `Infinity` is a legitimate value (e.g. "unlimited" max users)
- * and always wins/loses as the extreme it is, so only NaN is excluded from comparison.
+ * spec), every value is NaN, or `eligible` (when given) rules every value out. `Infinity` is a
+ * legitimate value (e.g. "unlimited" max users) and always wins/loses as the extreme it is, so
+ * only NaN is excluded from comparison on that basis. `eligible[i] === false` excludes column i
+ * from winning regardless of its value (e.g. a column that doesn't fit; see
+ * `CompareRowSpec.excludeUnfitFromBest`) — the value is still shown, just never highlighted.
  */
-export function bestColumnIndex(values: readonly number[], higherIsBetter: boolean): number {
-  const candidates = values.map((v, i) => ({ v, i })).filter((c) => !Number.isNaN(c.v));
+export function bestColumnIndex(values: readonly number[], higherIsBetter: boolean, eligible?: readonly boolean[]): number {
+  const candidates = values.map((v, i) => ({ v, i })).filter((c) => !Number.isNaN(c.v) && (eligible ? eligible[c.i] : true));
   if (candidates.length === 0) return -1;
   const best = higherIsBetter ? Math.max(...candidates.map((c) => c.v)) : Math.min(...candidates.map((c) => c.v));
   const winners = candidates.filter((c) => c.v === best);

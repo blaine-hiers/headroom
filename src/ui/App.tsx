@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useState } from 'react';
-import { calculate, cloneState, encodeCompareState, decodeCompareColumns } from '../lib';
+import { calculate, cloneState, encodeCompareState, decodeCompareColumns, MAX_COMPARE_COLUMNS } from '../lib';
 import type { CalcState } from '../lib';
 import { CompareTable } from './CompareTable';
 import { HardwarePanel } from './HardwarePanel';
@@ -7,12 +7,11 @@ import { Header } from './Header';
 import { ModelPanel } from './ModelPanel';
 import { QuantPanel } from './QuantPanel';
 import { Results } from './Results';
-import { initialState, maxContextFor, reducer } from './state';
+import { clampState, initialState, maxContextFor, reducer } from './state';
 import type { Action } from './state';
 import { WorkloadPanel } from './WorkloadPanel';
 
 const URL_DEBOUNCE_MS = 250;
-const MAX_COMPARE_COLUMNS = 3;
 
 function urlFor(columns: readonly CalcState[]): string {
   return `${window.location.pathname}?${encodeCompareState(columns)}`;
@@ -32,7 +31,9 @@ function columnSummary(s: CalcState): string {
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, undefined, () => initialState(window.location.search));
-  const [extraColumns, setExtraColumns] = useState<CalcState[]>(() => decodeCompareColumns(window.location.search));
+  // decodeCompareColumns only validates shape/types; a crafted c2/c3 (e.g. a huge gpuCount or
+  // negative vramGB) still needs the same range clamps the primary column gets via initialState.
+  const [extraColumns, setExtraColumns] = useState<CalcState[]>(() => decodeCompareColumns(window.location.search).map(clampState));
   const [compareOn, setCompareOn] = useState(() => extraColumns.length > 0);
   const [selected, setSelected] = useState(0); // 0 = primary state, n = extraColumns[n - 1]
 

@@ -2,6 +2,7 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { encodeState } from '../lib';
+import type { CalcState } from '../lib';
 import qwenApi from '../lib/__fixtures__/qwen2.5-7b-instruct.api.json';
 import qwenConfig from '../lib/__fixtures__/qwen2.5-7b-instruct.json';
 import { fromBase64 } from '../lib/__fixtures__/base64';
@@ -346,5 +347,23 @@ describe('App', () => {
 
     await user.click(screen.getByRole('button', { name: 'Compare: on' }));
     await vi.waitFor(() => expect(window.location.search).not.toMatch(/[?&]c2=/));
+  });
+
+  it('compare mode: a crafted out-of-range c2 in the URL is clamped like the primary column', async () => {
+    const bad: CalcState = {
+      ...defaultState,
+      hardware: { ...defaultState.hardware, gpuCount: 999_999, vramGB: -50, bandwidthGBs: -10, tflopsBf16: -5, reservePct: -20, overheadGB: 999 },
+    };
+    const search = `?${encodeState(defaultState)}&c2=${encodeURIComponent(encodeState(bad))}`;
+    window.history.replaceState(null, '', `/${search}`);
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    // A c2 column in the URL turns compare mode on by itself.
+    await user.click(screen.getByRole('button', { name: 'B' }));
+    // Same bounds initialState enforces on the primary column (MAX_GPUS = 16, vramGB >= 0.1).
+    expect(screen.getByLabelText('GPU count')).toHaveValue(16);
+    expect(screen.getByLabelText('VRAM per GPU')).toHaveValue(0.1);
   });
 });

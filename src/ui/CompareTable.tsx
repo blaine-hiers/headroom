@@ -1,9 +1,7 @@
 import type { ReactNode } from 'react';
-import { bestColumnIndex, columnLabel, COMPARE_ROWS, formatNumber, formatTokens } from '../lib';
+import { bestColumnIndex, columnLabel, COMPARE_ROWS, formatNumber, formatTokens, MAX_COMPARE_COLUMNS } from '../lib';
 import type { CalcResult } from '../lib';
 import { Bytes } from './Bytes';
-
-const MAX_COMPARE_COLUMNS = 3;
 
 export interface CompareColumn {
   result: CalcResult;
@@ -73,7 +71,8 @@ export function CompareTable({ columns, selected, onSelect, onDuplicate, onRemov
           <tbody>
             {COMPARE_ROWS.map((row) => {
               const values = columns.map((c) => row.value(c.result));
-              const winner = bestColumnIndex(values, row.higherIsBetter);
+              const eligible = row.excludeUnfitFromBest ? columns.map((c) => c.result.fits) : undefined;
+              const winner = bestColumnIndex(values, row.higherIsBetter, eligible);
               return (
                 <tr key={row.key}>
                   <th scope="row">{row.label}</th>
