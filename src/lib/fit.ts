@@ -1,7 +1,8 @@
+import { resolveWeights } from './fileWeights';
 import { kvBytesForContext, kvBytesPerToken } from './kvcache';
 import { decodeThroughput } from './throughput';
 import type { CalcResult, CalcState, HardwareSpec } from './types';
-import { activeParamsDetailed, weightBytes } from './weights';
+import { activeParamsDetailed } from './weights';
 
 export const TABLE_CONTEXTS = [2048, 8192, 32768, 131072] as const;
 
@@ -49,7 +50,10 @@ export function calculate(state: CalcState): CalcResult {
   const perToken = kvBytesPerToken(model, quant.kv);
   const perRequest = kvBytesForContext(model, ctx, quant.kv);
   const allUsers = perRequest * users;
-  const weights = weightBytes(model.params, quant.weight);
+  // Recomputed from the spec (not model.activeParams) so a manual edit stays consistent.
+  const active = activeParamsDetailed(model);
+  const resolved = resolveWeights(model, quant.weight, active.active);
+  const weights = resolved.bytes;
   const overhead = overheadBytes(hardware);
   const usable = usableBytes(hardware);
   const fixed = weights + overhead;
@@ -64,9 +68,7 @@ export function calculate(state: CalcState): CalcResult {
       return { contextTokens: c, kvBytesPerRequest: kvReq, maxUsers: maxUsers(usable, fixed, kvReq) };
     });
 
-  // Recomputed from the spec (not model.activeParams) so a manual edit stays consistent.
-  const active = activeParamsDetailed(model);
-  const activeWeightBytes = weightBytes(active.active, quant.weight);
+  const activeWeightBytes = resolved.activeBytes;
   const throughput = decodeThroughput({
     activeWeightBytes,
     kvBytesPerRequest: perRequest,
@@ -80,6 +82,8 @@ export function calculate(state: CalcState): CalcResult {
     kvBytesPerRequest: perRequest,
     kvBytesAllUsers: allUsers,
     weightBytes: weights,
+    weightSource: resolved.source,
+    activeWeightBytes,
     activeParams: active.active,
     activeParamsMethod: active.method,
     overheadBytes: overhead,

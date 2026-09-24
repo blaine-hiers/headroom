@@ -74,6 +74,13 @@ All sizes are in bytes.
 | q3_k_m | 3.91 |
 | q2_k | 3.35 |
 
+**Weight bytes from repo files.** For a GGUF repo, and for a pre-quantized safetensors repo (a `quantization_config` in `config.json`: AWQ, GPTQ, FP8…), Headroom uses the exact size of the weight files instead of the estimate:
+
+- GGUF: the size of the chosen `.gguf` file, or of all its shards added up for a split file (`-00001-of-0000N`).
+- Safetensors: the sum of the repo's top-level `*.safetensors` files (a Mistral-style duplicate `consolidated.safetensors` is left out).
+
+The file figure only applies while the weight quant is the one the files are in. Loading the repo pre-selects that quant. GGUF tags not in the table (IQ2_M, Q5_K_S…) and other methods get the nearest table quant by effective bits (`fileBytes × 8 / params`). Pick any other quant and the estimate comes back. The Weights card says which source it used: *from repo files* with the effective bits per weight, or *estimated*. For decode, the active share of the files is `fileBytes × activeParams / params`.
+
 **Active params** (what decode reads per token, used by the throughput estimate). Dense models read all their params. For MoE models there are two methods, and the Weights card and the MoE note say which one was used:
 
 - **Structural** (used when the config gives `intermediate_size` and `num_attention_heads`), summed over the layer shapes:
@@ -102,17 +109,20 @@ All sizes are in bytes.
 
 ## Where the model data comes from
 
-For a repo id, Headroom makes two requests straight from your browser. The Hub sends CORS headers, so no proxy is needed.
+For a repo id, Headroom makes three requests straight from your browser. The Hub sends CORS headers, so no proxy is needed.
 
 - `GET https://huggingface.co/api/models/{id}?expand[]=safetensors&expand[]=gated`, which gives the parameter count (`safetensors.total`)
 - `GET https://huggingface.co/{id}/resolve/main/config.json`, which gives the architecture: layers, heads, head dim, MLA, sliding window, MoE and max positions
+- `GET https://huggingface.co/api/models/{id}?blobs=true&expand[]=siblings&expand[]=gguf`, which lists the repo's files with their sizes, and for GGUF repos the parameter count (`gguf.total`)
+
+**GGUF repos** (for example `bartowski/…-GGUF`) have no `config.json`. When a repo has `.gguf` files and no `.safetensors` files, Headroom lists the GGUF files, grouping split shards, and shows a **GGUF file** picker. It defaults to Q4_K_M when there is one. The quant comes from the filename, and the file's size is the weight size. The architecture comes from the file's own header: Headroom reads the first 1 MiB with an HTTP `Range` request (`bytes=0-1048575`) on `resolve/main/{file}`. The Hub redirects that to its CDN, which answers ranged CORS reads. From the header's metadata it reads `general.architecture`, then `<arch>.block_count`, `.attention.head_count`, `.attention.head_count_kv`, `.attention.key_length`, `.context_length`, `.embedding_length`, `.feed_forward_length`, `.expert_count`, `.expert_used_count`, `.expert_shared_count`, `.expert_feed_forward_length`, `.leading_dense_block_count`, `.attention.sliding_window` and the MLA keys (`.attention.kv_lora_rank`, `.attention.q_lora_rank`, `.rope.dimension_count`, `.attention.key_length_mla`, `.attention.value_length_mla`). The vocabulary size is the length of `tokenizer.ggml.tokens`. These go through the same rules as `config.json`. GGUF files don't store which layers slide, so Headroom uses llama.cpp's fixed patterns: every 2nd layer is full attention for Gemma 2 and gpt-oss, every 4th for Cohere 2, and every 6th for Gemma 3. For other architectures no layers slide, which is the conservative choice.
+
+If the listing or the header read fails, you get a status message and the calculator keeps its last model. You can then enter the architecture under **Advanced**, or look up the base BF16 repo, which has the same architecture.
 
 Gated repos such as Llama and Gemma return 401 without a token. You have two options:
 
 - Paste a Hugging Face token under **Gated models**. It is stored only in your browser's `localStorage` and sent only to huggingface.co.
 - Use a built-in preset.
-
-GGUF repos are not parsed. Look up the base BF16 repo instead, since it has the same architecture, then choose the GGUF quant.
 
 ## Adding a GPU or model preset
 

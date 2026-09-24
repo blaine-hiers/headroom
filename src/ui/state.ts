@@ -65,7 +65,8 @@ export function reducer(state: CalcState, action: Action): CalcState {
       return {
         ...state,
         model,
-        quant: { ...state.quant, weight: defaultWeightQuantFor(model.nativeDtype) },
+        // Repo files pin the quant they are in; otherwise start from the native dtype.
+        quant: { ...state.quant, weight: model.fileWeights?.quant ?? defaultWeightQuantFor(model.nativeDtype) },
         workload: clampWorkload(state.workload, model),
       };
     }

@@ -7,5 +7,8 @@ export * from './throughput';
 export * from './format';
 export * from './hf';
 export * from './urlState';
+export * from './gguf';
+export * from './fileWeights';
+export * from './hfFiles';
 export * from './presets/gpus';
 export * from './presets/models';

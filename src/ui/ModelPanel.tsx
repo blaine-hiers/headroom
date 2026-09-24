@@ -1,6 +1,6 @@
 import { useId, useRef, useState } from 'react';
-import { activeParamsDetailed, fetchModel, findModelPreset, MODEL_PRESETS } from '../lib';
-import type { Attention, ModelSpec, MoeSpec, NativeDtype } from '../lib';
+import { activeParamsDetailed, fetchRepo, findModelPreset, formatBytes, MODEL_PRESETS } from '../lib';
+import type { Attention, GgufOption, ModelSpec, MoeSpec, NativeDtype } from '../lib';
 import { NumberField } from './NumberField';
 import { readStorage, TOKEN_KEY, writeStorage } from './storage';
 
@@ -26,17 +26,19 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
   const [repoId, setRepoId] = useState(model.id);
   const [token, setToken] = useState(() => readStorage(TOKEN_KEY) ?? '');
   const [fetchState, setFetchState] = useState<FetchState>({ kind: 'idle' });
+  const [gguf, setGguf] = useState<{ id: string; options: GgufOption[]; selected: string } | undefined>(undefined);
   const requestSeq = useRef(0);
 
-  const doFetch = async () => {
-    const id = repoId.trim();
+  const doFetch = async (ggufPath?: string, repo: string = repoId) => {
+    const id = repo.trim();
     const seq = ++requestSeq.current;
     setFetchState({ kind: 'fetching', id });
-    const res = await fetchModel(id, token || undefined);
+    const res = await fetchRepo(id, token || undefined, ggufPath);
     if (seq !== requestSeq.current) return; // a newer fetch or preset pick superseded this one
     if (res.ok) {
       setFetchState({ kind: 'idle' });
       setRepoId(res.spec.id);
+      setGguf(res.gguf && { id: res.spec.id, ...res.gguf });
       onLoad(res.spec);
     } else {
       setFetchState({ kind: 'error', id, error: res.error });
@@ -46,6 +48,7 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
   const pickPreset = (spec: ModelSpec) => {
     requestSeq.current++;
     setFetchState({ kind: 'idle' });
+    setGguf(undefined);
     setRepoId(spec.id);
     onLoad(spec);
   };
@@ -83,6 +86,25 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
           </button>
         </div>
       </div>
+
+      {gguf && (
+        <div className="field">
+          <label htmlFor={`${inputId}-gguf`}>GGUF file</label>
+          <select
+            id={`${inputId}-gguf`}
+            value={gguf.selected}
+            disabled={fetchState.kind === 'fetching'}
+            onChange={(e) => void doFetch(e.target.value, gguf.id)}
+          >
+            {gguf.options.map((o) => (
+              <option key={o.path} value={o.path} title={o.path}>
+                {o.label} · {formatBytes(o.bytes)}
+                {o.shards > 1 ? ` · ${o.shards} parts` : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       <div className="chips" role="group" aria-label="Built-in model presets">
         {MODEL_PRESETS.map((p) => (

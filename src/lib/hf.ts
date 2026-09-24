@@ -240,7 +240,25 @@ export function parseConfig(json: unknown, params: number | undefined, id: strin
   return spec;
 }
 
-export type FetchModelResult = { ok: true; spec: ModelSpec } | { ok: false; error: string };
+/** A repo's quantization_config, when it ships pre-quantized weights. */
+export interface PreQuant {
+  method: string;
+  bits?: number;
+}
+
+/** quantization_config.quant_method (lower-cased) and bits, from config.json or its text_config. */
+export function preQuantOf(config: unknown): PreQuant | undefined {
+  if (!isObject(config)) return undefined;
+  const text = isObject(config.text_config) ? config.text_config : {};
+  const q = isObject(text.quantization_config) ? text.quantization_config : config.quantization_config;
+  if (!isObject(q)) return undefined;
+  const method = str(q.quant_method)?.toLowerCase();
+  if (!method) return undefined;
+  const bits = num(q.bits);
+  return bits === undefined ? { method } : { method, bits };
+}
+
+export type FetchModelResult = { ok: true; spec: ModelSpec; quant?: PreQuant } | { ok: false; error: string };
 
 function statusError(status: number): string {
   if (status === 401 || status === 403) return HF_ERRORS.gated;
@@ -298,7 +316,9 @@ export async function fetchModel(
   }
 
   try {
-    return { ok: true, spec: parseConfig(config, params, id) };
+    const spec = parseConfig(config, params, id);
+    const quant = preQuantOf(config);
+    return quant ? { ok: true, spec, quant } : { ok: true, spec };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : HF_ERRORS.badConfig };
   }

@@ -71,4 +71,17 @@ describe('urlState', () => {
     expect(decodeState(`${good}&ff=,2,1,,,,`, fallback)).toBe(fallback);
     expect(decodeState(`${good}&ff=1,2,0,x,,,`, fallback)).toBe(fallback);
   });
+
+  it('round-trips file weights, and links without them still decode', () => {
+    const s: CalcState = {
+      ...fallback,
+      model: makeSpec({ fileWeights: { bytes: 18_556_686_080, label: 'Q4_K_M GGUF', quant: 'q4_k_m' } }),
+      quant: { weight: 'q4_k_m', kv: 'fp16' },
+    };
+    expect(decodeState(encodeState(s), fallback)).toEqual(s);
+    const noQuant: CalcState = { ...fallback, model: makeSpec({ fileWeights: { bytes: 5e9, label: 'IQ2_M GGUF' } }) };
+    expect(decodeState(encodeState(noQuant), fallback)).toEqual(noQuant);
+    expect(decodeState(encodeState(fallback), fallback).model.fileWeights).toBeUndefined();
+    expect(decodeState(`${encodeState(fallback)}&fwb=-1`, fallback)).toBe(fallback);
+  });
 });
