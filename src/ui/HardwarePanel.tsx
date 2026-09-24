@@ -24,7 +24,20 @@ export function HardwarePanel({ hardware, onChange }: Props) {
       <h2 id="hw-h">Hardware</h2>
       <div className="field">
         <label htmlFor={gpuId}>GPU</label>
-        <select id={gpuId} value={hardware.gpuName} onChange={(e) => onChange({ gpuName: e.target.value })}>
+        <select
+          id={gpuId}
+          value={hardware.gpuName}
+          onChange={(e) => {
+            const newGpuName = e.target.value;
+            const newGpu = findGpuPreset(newGpuName);
+            const patch: Partial<HardwareSpec> = { gpuName: newGpuName };
+            // Clear appleWiredLimitGB when switching to a non-Apple GPU
+            if (newGpu?.vendor !== 'apple' && hardware.appleWiredLimitGB !== undefined) {
+              patch.appleWiredLimitGB = undefined;
+            }
+            onChange(patch);
+          }}
+        >
           {VENDORS.map((v) => (
             <optgroup key={v.vendor} label={v.label}>
               {GPU_PRESETS.filter((g) => g.vendor === v.vendor).map((g) => (

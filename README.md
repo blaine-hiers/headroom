@@ -87,7 +87,8 @@ All sizes are in bytes.
 - **Ratio** (the fallback when those fields are missing): `params × (expertsPerToken + sharedExperts) / (numExperts + sharedExperts)`. Attention and embeddings are always active, so this can understate the real figure by a third, which overstates tok/s.
 
 **Fit**
-- `usable = gpuCount × vramGB × 1e9 × (1 − reservePct/100)`
+- `effectiveVramGB = vramGB` for non-Apple GPUs; for Apple GPUs (which have unified memory), `effectiveVramGB = min(appleWiredLimitGB, vramGB ≤ 36 ? vramGB × 0.67 : vramGB × 0.75)`. macOS caps GPU-wired memory by default at 0.67× RAM for ≤36 GB, 0.75× above that (observed by MLX and llama.cpp communities). You can raise it with `sudo sysctl iogpu.wired_limit_mb=<MB>`, and Headroom will use that limit if you provide `appleWiredLimitGB` (clamped to vramGB).
+- `usable = gpuCount × effectiveVramGB × 1e9 × (1 − reservePct/100)`
 - `fixed = weights + overheadGB × 1e9 × gpuCount`
 - `total(N) = fixed + N × kvPerRequest(C)`
 - `fits = total(N) ≤ usable`. Headroom under 10% of usable is flagged as **Tight**.

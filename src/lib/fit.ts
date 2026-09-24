@@ -9,7 +9,8 @@ export const TABLE_CONTEXTS = [2048, 8192, 32768, 131072] as const;
 /**
  * Computes the effective usable VRAM per GPU, accounting for macOS GPU wired-memory limits on Apple.
  * macOS caps GPU-wired memory at: 0.67 × RAM for ≤36 GB, 0.75 × RAM above that.
- * See: https://developer.apple.com/forums/thread/752815
+ * These are the observed defaults reported by the MLX and llama.cpp communities; raise them with
+ * `sudo sysctl iogpu.wired_limit_mb=<MB>`. See: https://developer.apple.com/forums/thread/752815
  */
 export function effectiveVramGB(gpuName: string, vramGB: number, appleWiredLimitGB?: number): number {
   const gpu = findGpuPreset(gpuName);
