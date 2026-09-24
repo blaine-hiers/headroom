@@ -6,8 +6,6 @@ interface Props {
   getLink: () => string;
 }
 
-export const GITHUB_URL = 'https://github.com/blaine-hiers/headroom';
-
 export function Header({ getLink }: Props) {
   const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle');
   const timer = useRef<number | undefined>(undefined);
@@ -47,9 +45,6 @@ export function Header({ getLink }: Props) {
           <span aria-live="polite">{copied === 'copied' ? 'Copied' : copied === 'failed' ? 'Link is in the address bar' : 'Copy link'}</span>
         </button>
         <ThemeToggle />
-        <a className="btn btn-ghost" href={GITHUB_URL} target="_blank" rel="noreferrer">
-          GitHub
-        </a>
       </nav>
     </header>
   );
