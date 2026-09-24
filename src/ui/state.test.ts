@@ -1,13 +1,44 @@
 import { describe, expect, it } from 'vitest';
 import { CUSTOM_GPU_NAME, encodeState, findModelPreset } from '../lib';
 import type { CalcState } from '../lib';
-import { clampModel, defaultState, initialState, MAX_DIM, reducer } from './state';
+import { calculate } from '../lib';
+import { clampModel, defaultState, initialState, MAX_DIM, MAX_FILE_BYTES, reducer } from './state';
 
 function preset(name: string) {
   const m = findModelPreset(name);
   if (!m) throw new Error(`missing preset ${name}`);
   return m;
 }
+
+describe('reducer: file weights', () => {
+  const gguf: CalcState = {
+    ...defaultState,
+    model: { ...defaultState.model, source: 'hf', fileWeights: { bytes: 42.5e9, label: 'Q4_K_M GGUF', quant: 'q4_k_m' } },
+  };
+
+  it('loading a spec with file weights pre-selects their quant', () => {
+    const s = reducer(defaultState, { type: 'loadModel', spec: gguf.model });
+    expect(s.quant.weight).toBe('q4_k_m');
+    expect(calculate(s).weightSource).toBe('files');
+  });
+
+  it('an Advanced edit to params or the architecture drops the file weights', () => {
+    const loaded = reducer(defaultState, { type: 'loadModel', spec: gguf.model });
+    for (const patch of [{ params: 8e9 }, { numLayers: 40 }, { headDim: 64 }, { moe: undefined }]) {
+      const s = reducer(loaded, { type: 'editModel', patch });
+      expect(s.model.fileWeights).toBeUndefined();
+      expect(calculate(s).weightSource).toBe('estimate');
+    }
+    // The native dtype says nothing about the files: they stay.
+    expect(reducer(loaded, { type: 'editModel', patch: { nativeDtype: 'fp16' } }).model.fileWeights).toBeDefined();
+  });
+
+  it('a link with huge file bytes is capped like params', () => {
+    const s = initialState(`?${encodeState({ ...gguf, model: { ...gguf.model, fileWeights: { bytes: 1e30, label: 'x', quant: 'q4_k_m' } } })}`);
+    expect(s.model.fileWeights?.bytes).toBe(MAX_FILE_BYTES);
+    expect(clampModel({ ...gguf.model, fileWeights: { bytes: 5e9, label: 'x', quant: 'q4_k_m' } }).fileWeights?.bytes).toBe(5e9);
+  });
+});
 
 describe('reducer: warnings follow Advanced edits', () => {
   const gptOss: CalcState = { ...defaultState, model: preset('gpt-oss-120b') };

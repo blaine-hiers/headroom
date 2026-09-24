@@ -185,13 +185,12 @@ export function decodeState(qs: string, fallback: CalcState): CalcState {
     }
     const ffnRaw = q.get(K.ffn);
     if (ffnRaw !== null) model.ffn = decodeFfn(ffnRaw);
-    if (q.has(K.fileWeightBytes)) {
+    // File bytes only mean something with the quant they are in: without `fwq` they are ignored.
+    if (q.has(K.fileWeightBytes) && q.has(K.fileWeightQuant)) {
       const bytes = num(K.fileWeightBytes);
       if (!(bytes > 0)) throw new BadState();
-      model.fileWeights = { bytes, label: q.get(K.fileWeightLabel) ?? '' };
-      if (q.has(K.fileWeightQuant)) {
-        model.fileWeights.quant = oneOf(q.get(K.fileWeightQuant), Object.keys(WEIGHT_QUANTS) as WeightQuantKey[]);
-      }
+      const quant = oneOf(q.get(K.fileWeightQuant), Object.keys(WEIGHT_QUANTS) as WeightQuantKey[]);
+      model.fileWeights = { bytes, label: q.get(K.fileWeightLabel) ?? '', quant };
     }
 
     return {

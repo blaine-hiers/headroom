@@ -69,7 +69,7 @@ export interface FileWeights {
   /** What the files are, e.g. "Q4_K_M GGUF" or "AWQ safetensors". */
   label: string;
   /** The weight quant the files match; picking another quant falls back to the estimate. */
-  quant?: WeightQuantKey;
+  quant: WeightQuantKey;
 }
 
 /** Where the weight figure came from. */

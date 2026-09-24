@@ -254,7 +254,12 @@ export function preQuantOf(config: unknown): PreQuant | undefined {
   if (!isObject(q)) return undefined;
   const method = str(q.quant_method)?.toLowerCase();
   if (!method) return undefined;
-  const bits = num(q.bits);
+  let bits = num(q.bits);
+  if (method === 'bitsandbytes') {
+    // bitsandbytes configs carry load_in_8bit / load_in_4bit (and bnb_4bit_* defaults even for 8-bit).
+    if (q.load_in_8bit === true) bits = 8;
+    else if (q.load_in_4bit === true || (q.load_in_4bit === undefined && typeof q.bnb_4bit_quant_type === 'string')) bits = 4;
+  }
   return bits === undefined ? { method } : { method, bits };
 }
 

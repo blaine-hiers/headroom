@@ -79,9 +79,11 @@ describe('urlState', () => {
       quant: { weight: 'q4_k_m', kv: 'fp16' },
     };
     expect(decodeState(encodeState(s), fallback)).toEqual(s);
-    const noQuant: CalcState = { ...fallback, model: makeSpec({ fileWeights: { bytes: 5e9, label: 'IQ2_M GGUF' } }) };
-    expect(decodeState(encodeState(noQuant), fallback)).toEqual(noQuant);
+    // `fwb` without `fwq` (never written by encodeState): the bytes are ignored, the rest decodes.
+    const noQuant = decodeState(`${encodeState(fallback)}&fwb=5000000000&fwl=IQ2_M%20GGUF`, fallback);
+    expect(noQuant).not.toBe(fallback);
+    expect(noQuant.model.fileWeights).toBeUndefined();
     expect(decodeState(encodeState(fallback), fallback).model.fileWeights).toBeUndefined();
-    expect(decodeState(`${encodeState(fallback)}&fwb=-1`, fallback)).toBe(fallback);
+    expect(decodeState(`${encodeState(fallback)}&fwb=-1&fwq=q4_k_m`, fallback)).toBe(fallback);
   });
 });

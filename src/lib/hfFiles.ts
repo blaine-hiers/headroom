@@ -1,6 +1,7 @@
 import { closestWeightQuant, effectiveBitsPerWeight } from './fileWeights';
 import { parseGgufHeader, parseGgufSpec } from './gguf';
 import { fetchModel, HF_ERRORS, normalizeModelId } from './hf';
+import { WEIGHT_QUANTS } from './quant';
 import type { PreQuant } from './hf';
 import type { FileWeights, ModelSpec, WeightQuantKey } from './types';
 
@@ -115,28 +116,67 @@ const GGUF_QUANT_KEYS: Record<string, WeightQuantKey> = {
   Q2_K: 'q2_k',
 };
 
-/** Table quant for a GGUF tag; tags not in the table get the nearest one by effective bits. */
-export function ggufWeightQuant(label: string, bytes: number, params: number): WeightQuantKey | undefined {
-  return GGUF_QUANT_KEYS[label] ?? closestWeightQuant(effectiveBitsPerWeight(bytes, params));
+// GGUF tag families -> nearest table quant, for tags not in the table when params are unknown.
+const GGUF_FAMILIES: Array<[RegExp, WeightQuantKey]> = [
+  [/^(IQ1|IQ2|Q2|TQ)/, 'q2_k'],
+  [/^(IQ3|Q3)/, 'q3_k_m'],
+  [/^IQ4/, 'iq4_xs'],
+  [/^Q4_K/, 'q4_k_m'],
+  [/^(Q4_0|Q4_1|MXFP4)/, 'q4_0'],
+  [/^Q5/, 'q5_k_m'],
+  [/^Q6/, 'q6_k'],
+  [/^Q8/, 'q8_0'],
+];
+
+/** A table quant for some weight files; `exact` is false when it is only the closest one. */
+export interface QuantMatch {
+  quant: WeightQuantKey;
+  exact: boolean;
+}
+
+/**
+ * Table quant for a GGUF tag: the tag itself when it is in the table, else the nearest by
+ * effective bits (params known), else by tag family (IQ2_M -> Q2_K). Undefined when nothing fits.
+ */
+export function ggufWeightQuant(label: string, bytes: number, params: number): QuantMatch | undefined {
+  const direct = GGUF_QUANT_KEYS[label];
+  if (direct) return { quant: direct, exact: true };
+  const quant = closestWeightQuant(effectiveBitsPerWeight(bytes, params)) ?? GGUF_FAMILIES.find(([re]) => re.test(label))?.[1];
+  return quant ? { quant, exact: false } : undefined;
 }
 
 /** Table quant for a pre-quantized safetensors repo; unknown methods get the nearest by effective bits. */
-export function preQuantWeightQuant(q: PreQuant, bytes: number, params: number): WeightQuantKey | undefined {
-  if (q.method === 'fp8') return 'fp8';
-  if ((q.method === 'awq' || q.method === 'gptq') && q.bits === 4) return 'awq_gptq_4bit';
-  return closestWeightQuant(effectiveBitsPerWeight(bytes, params));
+export function preQuantWeightQuant(q: PreQuant, bytes: number, params: number): QuantMatch | undefined {
+  if (q.method === 'fp8') return { quant: 'fp8', exact: true };
+  if ((q.method === 'awq' || q.method === 'gptq') && q.bits === 4) return { quant: 'awq_gptq_4bit', exact: true };
+  if (q.method === 'bitsandbytes' && q.bits === 4) return { quant: 'nf4', exact: true };
+  if (q.method === 'bitsandbytes' && q.bits === 8) return { quant: 'q8_0', exact: true };
+  const quant = closestWeightQuant(effectiveBitsPerWeight(bytes, params));
+  return quant ? { quant, exact: false } : undefined;
 }
 
 export type FetchRepoResult =
-  | { ok: true; spec: ModelSpec; gguf?: { options: GgufOption[]; selected: string } }
+  | { ok: true; spec: ModelSpec; gguf?: { options: GgufOption[]; selected: string }; note?: string }
   | { ok: false; error: string };
 
 const ggufError = (reason: string) =>
   `found GGUF files, but the header of the chosen file could not be read (${reason}); enter the architecture under Advanced, or look up the base repo`;
 
-function withFileWeights(spec: ModelSpec, bytes: number, label: string, quant: WeightQuantKey | undefined): ModelSpec {
-  const fileWeights: FileWeights = { bytes, label };
-  if (quant) fileWeights.quant = quant;
+/** The note kept when weight files match no table quant: their bytes are not used. */
+export const noQuantMatchNote = (label: string) =>
+  `weight files found (${label}), but they match no weight quant in the table, so weights are estimated`;
+
+/**
+ * Attach file weights only with a table quant to tie them to; without one the bytes are
+ * dropped and a note says so (file bytes never apply to a quant they are not in).
+ */
+function withFileWeights(spec: ModelSpec, bytes: number, label: string, match: QuantMatch | undefined): ModelSpec {
+  if (!match) return { ...spec, warnings: [...spec.warnings, noQuantMatchNote(label)] };
+  const fileWeights: FileWeights = {
+    bytes,
+    label: match.exact ? label : `${label} (closest table quant: ${WEIGHT_QUANTS[match.quant].label})`,
+    quant: match.quant,
+  };
   return { ...spec, fileWeights };
 }
 
@@ -190,16 +230,24 @@ export async function fetchRepo(
   const hasSafetensors = files.some((f) => /\.safetensors$/i.test(f.path));
   if (options.length > 0 && !hasSafetensors) {
     const option = options.find((o) => o.path === ggufPath) ?? defaultGgufOption(options);
-    if (option) return fetchGguf(id, path, headers, option, options, listing?.ggufParams, fetchImpl);
+    if (option) {
+      const gguf = await fetchGguf(id, path, headers, option, options, listing?.ggufParams, fetchImpl);
+      if (gguf.ok) return gguf;
+      // The repo also has a usable config.json: keep today's behaviour, with a note.
+      if (model.ok) {
+        return { ok: true, spec: model.spec, note: `GGUF header not read (${gguf.reason}); architecture from config.json, weights estimated` };
+      }
+      return { ok: false, error: gguf.error };
+    }
   }
 
   if (!model.ok || !model.quant) return model;
   const bytes = safetensorsBytes(files);
   if (bytes === undefined) return { ok: true, spec: model.spec };
-  const quant = preQuantWeightQuant(model.quant, bytes, model.spec.params);
+  const match = preQuantWeightQuant(model.quant, bytes, model.spec.params);
   return {
     ok: true,
-    spec: withFileWeights(model.spec, bytes, `${model.quant.method.toUpperCase()} safetensors`, quant),
+    spec: withFileWeights(model.spec, bytes, `${model.quant.method.toUpperCase()} safetensors`, match),
   };
 }
 
@@ -211,26 +259,28 @@ async function fetchGguf(
   options: GgufOption[],
   params: number | undefined,
   fetchImpl: typeof fetch,
-): Promise<FetchRepoResult> {
+): Promise<Extract<FetchRepoResult, { ok: true }> | { ok: false; error: string; reason: string }> {
+  const fail = (reason: string, error = ggufError(reason)) => ({ ok: false as const, error, reason });
   const fileUrl = `https://huggingface.co/${path}/resolve/main/${option.path.split('/').map(encodeURIComponent).join('/')}`;
   let buf: ArrayBuffer;
   try {
     const res = await fetchImpl(fileUrl, { headers: { ...headers, Range: `bytes=0-${GGUF_HEADER_BYTES - 1}` } });
-    if (!res.ok) return { ok: false, error: ggufError(`HTTP ${res.status}`) };
+    if (res.status === 401 || res.status === 403) return fail(`HTTP ${res.status}`, HF_ERRORS.gated);
+    if (!res.ok) return fail(`HTTP ${res.status}`);
     buf = await readUpTo(res, GGUF_HEADER_BYTES);
   } catch {
-    return { ok: false, error: ggufError('network or CORS error') };
+    return fail('network or CORS error');
   }
   let spec: ModelSpec;
   try {
     spec = parseGgufSpec(parseGgufHeader(buf), params, id);
   } catch (e) {
-    return { ok: false, error: ggufError(e instanceof Error ? e.message : 'unreadable header') };
+    return fail(e instanceof Error ? e.message : 'unreadable header');
   }
-  const quant = ggufWeightQuant(option.label, option.bytes, spec.params);
+  const match = ggufWeightQuant(option.label, option.bytes, spec.params);
   return {
     ok: true,
-    spec: withFileWeights(spec, option.bytes, `${option.label} GGUF`, quant),
+    spec: withFileWeights(spec, option.bytes, `${option.label} GGUF`, match),
     gguf: { options, selected: option.path },
   };
 }

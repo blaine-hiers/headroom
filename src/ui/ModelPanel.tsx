@@ -10,7 +10,7 @@ interface Props {
   onEdit: (patch: Partial<ModelSpec>) => void;
 }
 
-type FetchState = { kind: 'idle' } | { kind: 'fetching'; id: string } | { kind: 'error'; id: string; error: string };
+type FetchState = { kind: 'idle'; note?: string } | { kind: 'fetching'; id: string } | { kind: 'error'; id: string; error: string };
 
 const SOURCE_LABEL: Record<ModelSpec['source'], string> = {
   hf: 'from Hugging Face',
@@ -36,7 +36,7 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
     const res = await fetchRepo(id, token || undefined, ggufPath);
     if (seq !== requestSeq.current) return; // a newer fetch or preset pick superseded this one
     if (res.ok) {
-      setFetchState({ kind: 'idle' });
+      setFetchState(res.note ? { kind: 'idle', note: res.note } : { kind: 'idle' });
       setRepoId(res.spec.id);
       setGguf(res.gguf && { id: res.spec.id, ...res.gguf });
       onLoad(res.spec);
@@ -138,6 +138,7 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
         {fetchState.kind === 'idle' && (
           <>
             <strong>{model.name}</strong> <span className="muted">· {SOURCE_LABEL[model.source]}</span>
+            {fetchState.note && <span className="muted"> · {fetchState.note}</span>}
           </>
         )}
       </p>

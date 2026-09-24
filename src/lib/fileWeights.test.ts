@@ -23,9 +23,10 @@ describe('resolveWeights', () => {
     expect(resolveWeights(makeSpec({ params: 70e9 }), 'q4_k_m', 70e9).source).toBe('estimate');
   });
 
-  it('file weights without a matching table quant apply to every quant; unknown params read all bytes', () => {
-    const spec = makeSpec({ params: 0, fileWeights: { bytes: 5e9, label: 'IQ2_M GGUF' } });
-    expect(resolveWeights(spec, 'bf16', 0)).toEqual({ bytes: 5e9, activeBytes: 5e9, source: 'files' });
+  it('file bytes never apply to another quant; with unknown params decode reads all of them', () => {
+    const spec = makeSpec({ params: 0, fileWeights: { bytes: 5e9, label: 'IQ2_M GGUF', quant: 'q2_k' } });
+    expect(resolveWeights(spec, 'q2_k', 0)).toEqual({ bytes: 5e9, activeBytes: 5e9, source: 'files' });
+    expect(resolveWeights(spec, 'bf16', 0).source).toBe('estimate');
   });
 });
 

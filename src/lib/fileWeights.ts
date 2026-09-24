@@ -21,7 +21,7 @@ export function effectiveBitsPerWeight(bytes: number, params: number): number {
  */
 export function resolveWeights(model: ModelSpec, quant: WeightQuantKey, activeParams: number): ResolvedWeights {
   const files = model.fileWeights;
-  if (files && files.bytes > 0 && (files.quant === undefined || files.quant === quant)) {
+  if (files && files.bytes > 0 && files.quant === quant) {
     const share = model.params > 0 ? Math.min(1, activeParams / model.params) : 1;
     return { bytes: files.bytes, activeBytes: files.bytes * share, source: 'files' };
   }

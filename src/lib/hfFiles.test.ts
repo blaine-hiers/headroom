@@ -3,14 +3,16 @@ import { fromBase64 } from './__fixtures__/base64';
 import qwenMoeB64 from './__fixtures__/qwen3-30b-a3b-q4_k_m.gguf.b64?raw';
 import qwenApiRaw from './__fixtures__/qwen2.5-7b-instruct.api.json?raw';
 import qwenRaw from './__fixtures__/qwen2.5-7b-instruct.json?raw';
-import { HF_ERRORS } from './hf';
+import { HF_ERRORS, preQuantOf } from './hf';
 import {
   defaultGgufOption,
   fetchRepo,
   GGUF_HEADER_BYTES,
   ggufOptions,
   ggufWeightQuant,
+  noQuantMatchNote,
   parseRepoListing,
+  preQuantWeightQuant,
   quantFromFilename,
   safetensorsBytes,
 } from './hfFiles';
@@ -83,10 +85,31 @@ describe('repo listing helpers', () => {
     expect(safetensorsBytes([{ path: 'x.gguf', size: 1 }])).toBeUndefined();
   });
 
-  it('ggufWeightQuant maps table quants directly and others to the nearest bits', () => {
-    expect(ggufWeightQuant('Q4_K_M', 1, 1)).toBe('q4_k_m');
-    expect(ggufWeightQuant('IQ2_M', 2.78e9, 7.6e9)).toBe('q2_k'); // 2.93 bits/weight
-    expect(ggufWeightQuant('IQ2_M', 2.78e9, 0)).toBeUndefined();
+  it('ggufWeightQuant: table tags exactly, others by effective bits, else by tag family', () => {
+    expect(ggufWeightQuant('Q4_K_M', 1, 1)).toEqual({ quant: 'q4_k_m', exact: true });
+    expect(ggufWeightQuant('IQ2_M', 2.78e9, 7.6e9)).toEqual({ quant: 'q2_k', exact: false }); // 2.93 bits/weight
+    // No params: the tag family decides.
+    expect(ggufWeightQuant('IQ2_M', 2.78e9, 0)).toEqual({ quant: 'q2_k', exact: false });
+    expect(ggufWeightQuant('Q2_K_L', 1, 0)).toEqual({ quant: 'q2_k', exact: false });
+    expect(ggufWeightQuant('Q4_K_XL', 1, 0)).toEqual({ quant: 'q4_k_m', exact: false });
+    expect(ggufWeightQuant('Q5_K_S', 1, 0)).toEqual({ quant: 'q5_k_m', exact: false });
+    expect(ggufWeightQuant('MXFP4', 1, 0)).toEqual({ quant: 'q4_0', exact: false });
+    expect(ggufWeightQuant('model', 1, 0)).toBeUndefined();
+  });
+
+  it('preQuantWeightQuant: bitsandbytes 4-bit is NF4 and 8-bit is INT8, whatever the bytes', () => {
+    expect(preQuantWeightQuant({ method: 'bitsandbytes', bits: 4 }, 5.5e9, 7.6e9)).toEqual({ quant: 'nf4', exact: true });
+    expect(preQuantWeightQuant({ method: 'bitsandbytes', bits: 8 }, 5.5e9, 7.6e9)).toEqual({ quant: 'q8_0', exact: true });
+    expect(preQuantWeightQuant({ method: 'awq', bits: 4 }, 1, 1)).toEqual({ quant: 'awq_gptq_4bit', exact: true });
+    expect(preQuantWeightQuant({ method: 'fp8' }, 1, 1)).toEqual({ quant: 'fp8', exact: true });
+    expect(preQuantWeightQuant({ method: 'mxfp4' }, 1, 0)).toBeUndefined();
+  });
+
+  it('preQuantOf reads bitsandbytes load_in_4bit / load_in_8bit', () => {
+    const bnb = (q: object) => preQuantOf({ quantization_config: { quant_method: 'bitsandbytes', ...q } });
+    expect(bnb({ load_in_4bit: true, bnb_4bit_quant_type: 'nf4' })).toEqual({ method: 'bitsandbytes', bits: 4 });
+    expect(bnb({ load_in_8bit: true, load_in_4bit: false, bnb_4bit_quant_type: 'fp4' })).toEqual({ method: 'bitsandbytes', bits: 8 });
+    expect(bnb({ bnb_4bit_quant_type: 'nf4' })).toEqual({ method: 'bitsandbytes', bits: 4 });
   });
 });
 
@@ -148,9 +171,60 @@ describe('fetchRepo', () => {
     const garbage = await fetchRepo(GGUF_REPO, undefined, undefined, ggufFetch(() => res(206, 'not a gguf at all, just text')) as typeof fetch);
     expect(garbage.ok).toBe(false);
     if (!garbage.ok) expect(garbage.error).toMatch(/not a GGUF file/);
-    const denied = await fetchRepo(GGUF_REPO, undefined, undefined, ggufFetch(() => res(403, 'no')) as typeof fetch);
+    const denied = await fetchRepo(GGUF_REPO, undefined, undefined, ggufFetch(() => res(500, 'no')) as typeof fetch);
     expect(denied.ok).toBe(false);
-    if (!denied.ok) expect(denied.error).toMatch(/HTTP 403/);
+    if (!denied.ok) expect(denied.error).toMatch(/HTTP 500/);
+  });
+
+  it('GGUF repo: a tag outside the table without gguf.total is tied to its closest quant and labelled so', async () => {
+    const listing = { siblings: [{ rfilename: 'm-IQ2_M.gguf', size: 11_000_000_000 }] };
+    const fetchImpl = async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes('?blobs=true')) return res(200, listing);
+      if (u.includes('/api/models/')) return res(200, {});
+      if (u.endsWith('/config.json')) return res(404, 'no');
+      return new Response(fromBase64(qwenMoeB64), { status: 206 });
+    };
+    const r = await fetchRepo(GGUF_REPO, undefined, undefined, fetchImpl as typeof fetch);
+    expect(r.ok && r.spec.params).toBe(0);
+    expect(r.ok && r.spec.fileWeights).toEqual({ bytes: 11e9, label: 'IQ2_M GGUF (closest table quant: Q2_K)', quant: 'q2_k' });
+  });
+
+  it('GGUF repo: a file with no recognisable quant tag keeps no file weights and says why', async () => {
+    const listing = { siblings: [{ rfilename: 'model.gguf', size: 11_000_000_000 }] };
+    const fetchImpl = async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes('?blobs=true')) return res(200, listing);
+      if (u.includes('/api/models/')) return res(200, {});
+      if (u.endsWith('/config.json')) return res(404, 'no');
+      return new Response(fromBase64(qwenMoeB64), { status: 206 });
+    };
+    const r = await fetchRepo(GGUF_REPO, undefined, undefined, fetchImpl as typeof fetch);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.spec.fileWeights).toBeUndefined();
+    expect(r.spec.warnings).toContain(noQuantMatchNote('model.gguf GGUF'));
+  });
+
+  it('gated GGUF repo: a 401/403 header read shows the gated hint', async () => {
+    const r = await fetchRepo(GGUF_REPO, undefined, undefined, ggufFetch(() => res(401, 'no')) as typeof fetch);
+    expect(r).toEqual({ ok: false, error: HF_ERRORS.gated });
+  });
+
+  it('GGUF files plus a usable config.json: a failed header read falls back to config.json with a note', async () => {
+    const fetchImpl = async (url: string | URL | Request) => {
+      const u = String(url);
+      if (u.includes('?blobs=true')) return res(200, ggufListing);
+      if (u.includes('/api/models/')) return res(200, j(qwenApiRaw));
+      if (u.endsWith('/config.json')) return res(200, j(qwenRaw));
+      throw new TypeError('Failed to fetch');
+    };
+    const r = await fetchRepo(GGUF_REPO, undefined, undefined, fetchImpl as typeof fetch);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.spec.numLayers).toBe(28);
+    expect(r.spec.fileWeights).toBeUndefined();
+    expect(r.note).toMatch(/GGUF header not read \(network or CORS error\)/);
   });
 
   it('pre-quantized safetensors repo: weight bytes from the files, labelled by quant method', async () => {
