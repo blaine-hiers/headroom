@@ -2,8 +2,11 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { encodeState } from '../lib';
+import type { CalcState } from '../lib';
 import qwenApi from '../lib/__fixtures__/qwen2.5-7b-instruct.api.json';
 import qwenConfig from '../lib/__fixtures__/qwen2.5-7b-instruct.json';
+import { fromBase64 } from '../lib/__fixtures__/base64';
+import qwenMoeB64 from '../lib/__fixtures__/qwen3-30b-a3b-q4_k_m.gguf.b64?raw';
 import App from './App';
 import { defaultState } from './state';
 
@@ -113,10 +116,46 @@ describe('App', () => {
     await user.type(input, 'Qwen/Qwen2.5-7B-Instruct{Enter}');
 
     expect(await screen.findByText('· from Hugging Face')).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3); // model API, config.json, file listing
     // 2 × 28 × 4 × 128 × 2 = 57,344 B
     expect(screen.getAllByText('57.3 KB').length).toBeGreaterThan(0);
     expect(screen.getAllByText('56 KiB').length).toBeGreaterThan(0);
+  });
+
+  it('fetches a GGUF repo: file picker, exact weight bytes, and the source on the Weights card', async () => {
+    const listing = {
+      siblings: [
+        { rfilename: 'Qwen_Qwen3-30B-A3B-Q4_K_M.gguf', size: 18_556_686_080 },
+        { rfilename: 'Qwen_Qwen3-30B-A3B-Q8_0.gguf', size: 32_483_935_968 },
+      ],
+      gguf: { total: 30_532_122_624 },
+    };
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('?blobs=true')) return Promise.resolve(jsonResponse(listing));
+      if (url.includes('/api/models/')) return Promise.resolve(jsonResponse({}));
+      if (url.endsWith('config.json')) return Promise.resolve(jsonResponse({ error: 'Entry not found' }, 404));
+      return Promise.resolve(new Response(fromBase64(qwenMoeB64), { status: 206 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByLabelText('Hugging Face repo id');
+    await user.clear(input);
+    await user.type(input, 'bartowski/Qwen_Qwen3-30B-A3B-GGUF{Enter}');
+
+    expect(await screen.findByText('· from Hugging Face')).toBeInTheDocument();
+    expect(screen.getByLabelText('GGUF file')).toHaveValue('Qwen_Qwen3-30B-A3B-Q4_K_M.gguf');
+    expect(screen.getByLabelText('Weights')).toHaveValue('q4_k_m');
+    expect(screen.getAllByText('18.6 GB').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Q4_K_M GGUF, from repo files, 4\.86 bits\/weight effective/)).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('GGUF file'), 'Qwen_Qwen3-30B-A3B-Q8_0.gguf');
+    expect(await screen.findByText(/Q8_0 GGUF, from repo files/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Weights')).toHaveValue('q8_0');
+
+    // Another quant than the files' one: back to the estimate, and the card says so.
+    await user.selectOptions(screen.getByLabelText('Weights'), 'bf16');
+    expect(screen.getByText(/BF16, 16 bits\/weight, estimated/)).toBeInTheDocument();
   });
 
   it('shows the fetching status, then the gated error with a preset fallback (401)', async () => {
@@ -219,6 +258,160 @@ describe('App', () => {
     await user.click(screen.getByLabelText('Max position'));
     await user.tab();
     expect(screen.getByText('· built-in preset')).toBeInTheDocument();
+  });
+
+  it('a fetched model appears as a recent chip and reloads without calling fetch', async () => {
+    const fetchMock = vi.fn((url: string) =>
+      Promise.resolve(url.includes('/api/models/') ? jsonResponse(qwenApi) : jsonResponse(qwenConfig)),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Fetch Qwen model
+    const input = screen.getByLabelText('Hugging Face repo id');
+    await user.clear(input);
+    await user.type(input, 'Qwen/Qwen2.5-7B-Instruct{Enter}');
+
+    expect(await screen.findByText('· from Hugging Face')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalled();
+
+    // Verify the model was stored in localStorage
+    const storedRecents = JSON.parse(window.localStorage.getItem('headroom.recents') || '[]');
+    expect(storedRecents).toHaveLength(1);
+    expect(storedRecents[0].id).toBe('Qwen/Qwen2.5-7B-Instruct');
+
+    // Switch to a different model (Llama 3.1 8B preset)
+    await user.click(screen.getByRole('button', { name: 'Llama 3.1 8B' }));
+    expect(screen.getByText('· built-in preset')).toBeInTheDocument();
+
+    // Reset the fetch mock call count
+    fetchMock.mockClear();
+
+    // Click on the Qwen recent chip (it should be rendered in the recent models section)
+    // The recent chip should now be visible; find it and click it
+    const recentButtons = screen.getAllByRole('button', { hidden: false });
+    const qwenButton = recentButtons.find((btn) => btn.textContent?.includes('Qwen2.5-7B-Instruct'));
+    expect(qwenButton).toBeInTheDocument();
+    await user.click(qwenButton!);
+
+    // Verify the model is loaded from localStorage
+    expect(await screen.findByText('· from Hugging Face')).toBeInTheDocument();
+
+    // Verify no fetch calls were made (model was loaded from localStorage)
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('clicking a fit-matrix cell applies that quant and context to the calculator', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByText('Fit matrix: weight quant × context'));
+
+    // Default model is the Llama 3.3 70B preset (BF16, 8192 tokens chosen).
+    expect(screen.getByLabelText('Weights')).toHaveValue('bf16');
+    expect(screen.getByLabelText('Context tokens')).toHaveValue(8192);
+
+    await user.click(screen.getByRole('button', { name: /^FP8 at 2K:/ }));
+
+    expect(screen.getByLabelText('Weights')).toHaveValue('fp8');
+    expect(screen.getByLabelText('Context tokens')).toHaveValue(2048);
+  });
+
+  it('compare mode: duplicating the config then editing the new column updates the compare table', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Turning Compare on starts from column B: a duplicate of the current (only) config.
+    await user.click(screen.getByRole('button', { name: 'Compare' }));
+    expect(screen.getByRole('button', { name: 'A' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'B' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'C' })).not.toBeInTheDocument();
+
+    // Freshly duplicated: A and B are identical, so nothing in the row is "better" yet.
+    let totalRow = screen.getByRole('row', { name: /^Total VRAM/ });
+    let cells = within(totalRow).getAllByRole('cell');
+    expect(cells).toHaveLength(2);
+    expect(cells[0]).toHaveTextContent(cells[1].textContent ?? '');
+    expect(cells[0]).not.toHaveClass('compare-best');
+    expect(cells[1]).not.toHaveClass('compare-best');
+
+    // Select column B, so the edit below lands on B, not A.
+    await user.click(screen.getByRole('button', { name: 'B' }));
+    const usersField = screen.getByLabelText('Concurrent users');
+    await user.clear(usersField);
+    await user.type(usersField, '32');
+    await user.tab();
+
+    totalRow = screen.getByRole('row', { name: /^Total VRAM/ });
+    cells = within(totalRow).getAllByRole('cell');
+    expect(cells[0]).not.toHaveTextContent(cells[1].textContent ?? '');
+    // B now uses more VRAM for the same hardware, so A (lower) is the highlighted, better column.
+    expect(cells[0]).toHaveClass('compare-best');
+    expect(cells[1]).not.toHaveClass('compare-best');
+
+    // Switching back to A edits A, not B, and leaves B's column untouched.
+    await user.click(screen.getByRole('button', { name: 'A' }));
+    expect(screen.getByLabelText('Concurrent users')).toHaveValue(1);
+  });
+
+  it('compare mode: a GGUF picker loaded in column B does not follow the user to column A (#20)', async () => {
+    const listing = {
+      siblings: [
+        { rfilename: 'Qwen_Qwen3-30B-A3B-Q4_K_M.gguf', size: 18_556_686_080 },
+        { rfilename: 'Qwen_Qwen3-30B-A3B-Q8_0.gguf', size: 32_483_935_968 },
+      ],
+      gguf: { total: 30_532_122_624 },
+    };
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('?blobs=true')) return Promise.resolve(jsonResponse(listing));
+      if (url.includes('/api/models/')) return Promise.resolve(jsonResponse({}));
+      if (url.endsWith('config.json')) return Promise.resolve(jsonResponse({ error: 'Entry not found' }, 404));
+      return Promise.resolve(new Response(fromBase64(qwenMoeB64), { status: 206 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'Compare' }));
+    await user.click(screen.getByRole('button', { name: 'B' }));
+    const input = screen.getByLabelText('Hugging Face repo id');
+    await user.clear(input);
+    await user.type(input, 'bartowski/Qwen_Qwen3-30B-A3B-GGUF{Enter}');
+    expect(await screen.findByLabelText('GGUF file')).toHaveValue('Qwen_Qwen3-30B-A3B-Q4_K_M.gguf');
+
+    // Back to A: A never loaded a GGUF repo, so there must be no picker (which would load B's repo into A).
+    await user.click(screen.getByRole('button', { name: 'A' }));
+    expect(screen.queryByLabelText('GGUF file')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Hugging Face repo id')).toHaveValue('meta-llama/Llama-3.3-70B-Instruct');
+    expect(screen.getByLabelText('Weights')).toHaveValue('bf16');
+  });
+
+  it('compare mode round-trips a 2-column URL and turning it off drops the extra column from the URL', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Compare' })); // auto-duplicates into a 2-column state
+    await vi.waitFor(() => expect(window.location.search).toMatch(/[?&]c2=/));
+
+    await user.click(screen.getByRole('button', { name: 'Compare: on' }));
+    await vi.waitFor(() => expect(window.location.search).not.toMatch(/[?&]c2=/));
+  });
+
+  it('compare mode: a crafted out-of-range c2 in the URL is clamped like the primary column', async () => {
+    const bad: CalcState = {
+      ...defaultState,
+      hardware: { ...defaultState.hardware, gpuCount: 999_999, vramGB: -50, bandwidthGBs: -10, tflopsBf16: -5, reservePct: -20, overheadGB: 999 },
+    };
+    const search = `?${encodeState(defaultState)}&c2=${encodeURIComponent(encodeState(bad))}`;
+    window.history.replaceState(null, '', `/${search}`);
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    // A c2 column in the URL turns compare mode on by itself.
+    await user.click(screen.getByRole('button', { name: 'B' }));
+    // Same bounds initialState enforces on the primary column (MAX_GPUS = 16, vramGB >= 0.1).
+    expect(screen.getByLabelText('GPU count')).toHaveValue(16);
+    expect(screen.getByLabelText('VRAM per GPU')).toHaveValue(0.1);
   });
 
   describe('Remember token toggle', () => {

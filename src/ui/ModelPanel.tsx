@@ -1,8 +1,10 @@
 import { useId, useRef, useState } from 'react';
-import { activeParamsDetailed, fetchModel, findModelPreset, MODEL_PRESETS } from '../lib';
-import type { Attention, ModelSpec, MoeSpec, NativeDtype } from '../lib';
+import { activeParamsDetailed, fetchRepo, findModelPreset, formatBytes, MODEL_PRESETS } from '../lib';
+import type { Attention, GgufOption, ModelSpec, MoeSpec, NativeDtype } from '../lib';
 import { NumberField } from './NumberField';
+import { RepoSearch } from './RepoSearch';
 import { readStorage, REMEMBER_TOKEN_KEY, TOKEN_KEY, writeStorage } from './storage';
+import { getRecents, addRecent, removeRecent, clearRecents } from './recents';
 
 interface Props {
   model: ModelSpec;
@@ -10,7 +12,7 @@ interface Props {
   onEdit: (patch: Partial<ModelSpec>) => void;
 }
 
-type FetchState = { kind: 'idle' } | { kind: 'fetching'; id: string } | { kind: 'error'; id: string; error: string };
+type FetchState = { kind: 'idle'; note?: string } | { kind: 'fetching'; id: string } | { kind: 'error'; id: string; error: string };
 
 const SOURCE_LABEL: Record<ModelSpec['source'], string> = {
   hf: 'from Hugging Face',
@@ -24,7 +26,6 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
   const inputId = useId();
   const tokenId = useId();
   const rememberId = useId();
-  const [repoId, setRepoId] = useState(model.id);
   // Resolve remember-vs-token together, once, so an explicit "don't remember" preference
   // never leaves a stale token (written by another tab, or an older build) loaded into
   // state or sitting in storage.
@@ -42,17 +43,21 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
   const [token, setToken] = useState(tokenInit.token);
   const [rememberToken, setRememberToken] = useState(tokenInit.remember);
   const [fetchState, setFetchState] = useState<FetchState>({ kind: 'idle' });
+  const [recents, setRecents] = useState(() => getRecents());
+  const [gguf, setGguf] = useState<{ id: string; options: GgufOption[]; selected: string } | undefined>(undefined);
   const requestSeq = useRef(0);
 
-  const doFetch = async () => {
-    const id = repoId.trim();
+  const doFetch = async (repo: string, ggufPath?: string) => {
+    const id = repo.trim();
     const seq = ++requestSeq.current;
     setFetchState({ kind: 'fetching', id });
-    const res = await fetchModel(id, token || undefined);
+    const res = await fetchRepo(id, token || undefined, ggufPath);
     if (seq !== requestSeq.current) return; // a newer fetch or preset pick superseded this one
     if (res.ok) {
-      setFetchState({ kind: 'idle' });
-      setRepoId(res.spec.id);
+      setFetchState(res.note ? { kind: 'idle', note: res.note } : { kind: 'idle' });
+      addRecent(res.spec);
+      setRecents(getRecents());
+      setGguf(res.gguf && { id: res.spec.id, ...res.gguf });
       onLoad(res.spec);
     } else {
       setFetchState({ kind: 'error', id, error: res.error });
@@ -62,7 +67,9 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
   const pickPreset = (spec: ModelSpec) => {
     requestSeq.current++;
     setFetchState({ kind: 'idle' });
-    setRepoId(spec.id);
+    setGguf(undefined);
+    addRecent(spec);
+    setRecents(getRecents());
     onLoad(spec);
   };
 
@@ -76,29 +83,34 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
   return (
     <section className="panel" aria-labelledby="model-h">
       <h2 id="model-h">Model</h2>
-      <div className="field">
-        <label htmlFor={inputId}>Hugging Face repo id</label>
-        <div className="row">
-          <input
-            id={inputId}
-            type="text"
-            placeholder="org/model"
-            spellCheck={false}
-            autoComplete="off"
-            value={repoId}
-            onChange={(e) => setRepoId(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                void doFetch();
-              }
-            }}
-          />
-          <button type="button" className="btn btn-primary" onClick={() => void doFetch()} disabled={fetchState.kind === 'fetching'}>
-            Fetch
-          </button>
+      <RepoSearch
+        value={model.id}
+        presets={MODEL_PRESETS}
+        token={token || undefined}
+        fetching={fetchState.kind === 'fetching'}
+        onSubmit={(id) => void doFetch(id)}
+        onSelectPreset={pickPreset}
+        onSelectHub={(id) => void doFetch(id)}
+      />
+
+      {gguf && (
+        <div className="field">
+          <label htmlFor={`${inputId}-gguf`}>GGUF file</label>
+          <select
+            id={`${inputId}-gguf`}
+            value={gguf.selected}
+            disabled={fetchState.kind === 'fetching'}
+            onChange={(e) => void doFetch(gguf.id, e.target.value)}
+          >
+            {gguf.options.map((o) => (
+              <option key={o.path} value={o.path} title={o.path}>
+                {o.label} · {formatBytes(o.bytes)}
+                {o.shards > 1 ? ` · ${o.shards} parts` : ''}
+              </option>
+            ))}
+          </select>
         </div>
-      </div>
+      )}
 
       <div className="chips" role="group" aria-label="Built-in model presets">
         {MODEL_PRESETS.map((p) => (
@@ -113,6 +125,44 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
           </button>
         ))}
       </div>
+
+      {recents.length > 0 && (
+        <div className="chips" role="group" aria-label="Recent models">
+          {recents.map((r) => (
+            <div key={r.id} className="chip-with-remove">
+              <button
+                type="button"
+                className="chip"
+                aria-pressed={model.id === r.id}
+                onClick={() => pickPreset(r)}
+              >
+                {r.name}
+              </button>
+              <button
+                type="button"
+                className="chip-remove"
+                aria-label={`Remove ${r.name} from recent`}
+                onClick={() => {
+                  removeRecent(r.id);
+                  setRecents(getRecents());
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => {
+              clearRecents();
+              setRecents([]);
+            }}
+          >
+            Clear recent
+          </button>
+        </div>
+      )}
 
       <p className={`status status-${fetchState.kind}`} aria-live="polite" role="status">
         {fetchState.kind === 'fetching' && <>Fetching {fetchState.id}…</>}
@@ -132,6 +182,7 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
         {fetchState.kind === 'idle' && (
           <>
             <strong>{model.name}</strong> <span className="muted">· {SOURCE_LABEL[model.source]}</span>
+            {fetchState.note && <span className="muted"> · {fetchState.note}</span>}
           </>
         )}
       </p>

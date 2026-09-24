@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { makeSpec } from './__fixtures__/makeSpec';
+import { findGpuPreset } from './presets/gpus';
+import { DEFAULT_OFFLOAD } from './offload';
 import { MODEL_PRESETS } from './presets/models';
 import type { CalcState } from './types';
 import { decodeState, encodeState } from './urlState';
@@ -8,8 +10,9 @@ import { activeParamsDetailed } from './weights';
 const fallback: CalcState = {
   model: makeSpec(),
   quant: { weight: 'bf16', kv: 'fp16' },
-  hardware: { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, reservePct: 5, overheadGB: 1 },
+  hardware: { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, tflopsBf16: 165.0, reservePct: 5, overheadGB: 1 },
   workload: { contextTokens: 8192, concurrentUsers: 1 },
+  runtime: 'generic',
 };
 
 describe('urlState', () => {
@@ -18,8 +21,12 @@ describe('urlState', () => {
       const s: CalcState = {
         model,
         quant: { weight: 'q4_k_m', kv: 'fp8' },
-        hardware: { gpuName: 'H100 SXM', gpuCount: 8, vramGB: 80, bandwidthGBs: 3350, reservePct: 7.5, overheadGB: 1.25 },
+        // H100 SXM has a preset usdPerHour, so it must be set here too: without a "up" param
+        // of its own, decodeState falls back to the named preset's price (issue #16), and an
+        // omitted field would otherwise fail to round-trip exactly.
+        hardware: { gpuName: 'H100 SXM', gpuCount: 8, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 7.5, overheadGB: 1.25, usdPerHour: findGpuPreset('H100 SXM')?.usdPerHour },
         workload: { contextTokens: 32768, concurrentUsers: 16 },
+        runtime: 'vllm',
       };
       const qs = encodeState(s);
       expect(decodeState(qs, fallback)).toEqual(s);
@@ -56,6 +63,141 @@ describe('urlState', () => {
     expect(qs.length).toBeLessThan(400);
   });
 
+  it('round-trips Apple wired-memory limit override', () => {
+    const s: CalcState = {
+      ...fallback,
+      hardware: { gpuName: 'Apple M2 Ultra', gpuCount: 1, vramGB: 192, bandwidthGBs: 800, tflopsBf16: 100, reservePct: 5, overheadGB: 1, appleWiredLimitGB: 120 },
+    };
+    expect(decodeState(encodeState(s), fallback)).toEqual(s);
+  });
+
+  it('omits Apple wired-memory limit when undefined', () => {
+    const s: CalcState = {
+      ...fallback,
+      hardware: { gpuName: 'Apple M2 Ultra', gpuCount: 1, vramGB: 192, bandwidthGBs: 800, tflopsBf16: 100, reservePct: 5, overheadGB: 1 },
+    };
+    const qs = encodeState(s);
+    expect(qs).not.toContain('awl');
+    expect(decodeState(qs, fallback)).toEqual(s);
+  });
+
+  it('ignores awl param when GPU is switched to non-Apple (stale param scenario)', () => {
+    // A URL with Apple M2 Ultra and awl set is loaded, but then user selects an H100
+    // The awl param in the URL is still there, but should be ignored since H100 is non-Apple
+    const appleState: CalcState = {
+      ...fallback,
+      hardware: { gpuName: 'Apple M2 Ultra', gpuCount: 1, vramGB: 192, bandwidthGBs: 800, tflopsBf16: 100, reservePct: 5, overheadGB: 1, appleWiredLimitGB: 120 },
+    };
+    const qs = encodeState(appleState);
+    // Now decode with H100 as the GPU instead
+    const nonAppleState: CalcState = {
+      ...fallback,
+      hardware: { gpuName: 'H100 SXM', gpuCount: 1, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 100, reservePct: 5, overheadGB: 1, appleWiredLimitGB: 120 },
+    };
+    const decoded = decodeState(qs, nonAppleState);
+    // The awl param is preserved in the URL state, but effectiveVramGB will ignore it for non-Apple GPUs
+    // (In the UI, HardwarePanel clears it when switching GPU selection)
+    expect(decoded.hardware.appleWiredLimitGB).toBe(120);
+  });
+
+  it('round-trips a cloud cost price', () => {
+    const s: CalcState = {
+      ...fallback,
+      hardware: { gpuName: 'H100 SXM', gpuCount: 1, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 5, overheadGB: 1, usdPerHour: 3.25 },
+    };
+    const qs = encodeState(s);
+    expect(qs).toContain('up=3.25');
+    expect(decodeState(qs, fallback)).toEqual(s);
+  });
+
+  it('omits the cloud cost price when undefined and the GPU has no listed price', () => {
+    // RTX 4090 is a consumer card with no usdPerHour preset value, so there is nothing to
+    // distinguish "cleared" from "never had a price" — no key, and no fallback needed either.
+    const qs = encodeState(fallback);
+    expect(qs).not.toContain('up=');
+    expect(decodeState(qs, fallback)).toEqual(fallback);
+    expect(decodeState(qs, fallback).hardware.usdPerHour).toBeUndefined();
+  });
+
+  it('a cleared price on a priced preset writes an explicit sentinel, and stays cleared on reload/share', () => {
+    // H100 SXM has a preset price; hardware.usdPerHour undefined here means the user blanked
+    // out the pre-filled field. Without a sentinel this would be indistinguishable from an old
+    // link that never had the "up" key, and the price would silently reappear on reload.
+    const s: CalcState = { ...fallback, hardware: { ...fallback.hardware, gpuName: 'H100 SXM', usdPerHour: undefined } };
+    const qs = encodeState(s);
+    expect(qs).toContain('up=&'); // present, empty — not absent
+    const decoded = decodeState(qs, fallback);
+    expect(decoded.hardware.usdPerHour).toBeUndefined();
+    expect(decoded).toEqual(s);
+  });
+
+  it('an old link without usdPerHour at all (issue #16) falls back to the named GPU preset price', () => {
+    const s: CalcState = { ...fallback, hardware: { ...fallback.hardware, gpuName: 'H100 SXM' } };
+    // Simulates a link saved before this feature existed: no "up" key present at all, as
+    // opposed to the present-but-empty sentinel a deliberately cleared price writes.
+    const qs = encodeState(s).replace(/&?up=[^&]*/, '');
+    expect(qs).not.toContain('up=');
+    const decoded = decodeState(qs, fallback);
+    expect(decoded.hardware.usdPerHour).toBe(findGpuPreset('H100 SXM')?.usdPerHour);
+  });
+
+  it('an old link without tflopsBf16 (issue #11) still decodes, from the named GPU preset', () => {
+    // fallback's gpuName is a known preset (RTX 4090), so the missing "tf" param should read
+    // the preset's own TFLOPS rather than a generic default — an old H100 link should not show
+    // an RTX-4090-speed TTFT.
+    const qs = encodeState(fallback).replace(/&?tf=[^&]*/, '');
+    expect(qs).not.toContain('tf=');
+    const decoded = decodeState(qs, fallback);
+    expect(decoded).not.toBe(fallback);
+    expect(decoded.hardware.tflopsBf16).toBe(findGpuPreset('RTX 4090')?.tflopsBf16);
+    expect(decoded).toEqual(fallback);
+  });
+
+  it('an old link for an unknown/custom GPU name falls back to the generic default', () => {
+    const s: CalcState = { ...fallback, hardware: { ...fallback.hardware, gpuName: 'Some Future GPU' } };
+    const qs = encodeState(s).replace(/&?tf=[^&]*/, '');
+    const decoded = decodeState(qs, fallback);
+    expect(decoded.hardware.tflopsBf16).toBe(100);
+  });
+
+  it('round-trips every runtime profile', () => {
+    for (const runtime of ['generic', 'vllm', 'llamacpp', 'sglang', 'mlx'] as const) {
+      const s: CalcState = { ...fallback, runtime };
+      expect(decodeState(encodeState(s), fallback)).toEqual(s);
+    }
+  });
+
+  it('a URL with no runtime key decodes as generic, with identical numbers to today', () => {
+    const qs = encodeState(fallback).replace(/&rt=[^&]*/, '');
+    expect(qs).not.toContain('rt=');
+    const decoded = decodeState(qs, fallback);
+    expect(decoded.runtime).toBe('generic');
+    expect(decoded).toEqual({ ...fallback, runtime: 'generic' });
+  });
+
+  it('round-trips the offload spec (#7)', () => {
+    const s: CalcState = {
+      ...fallback,
+      hardware: { ...fallback.hardware, offload: { enabled: true, systemRamGB: 64, ramBandwidthGBs: 90 } },
+    };
+    expect(decodeState(encodeState(s), fallback)).toEqual(s);
+  });
+
+  it('an old link with no offload keys decodes with offload left undefined (unchanged behavior)', () => {
+    const qs = encodeState(fallback);
+    expect(qs).not.toContain('oe=');
+    const decoded = decodeState(qs, fallback);
+    expect(decoded.hardware.offload).toBeUndefined();
+  });
+
+  it('omits offload keys for a fresh/default state, even when the field is explicitly set (#7)', () => {
+    const s: CalcState = { ...fallback, hardware: { ...fallback.hardware, offload: { ...DEFAULT_OFFLOAD } } };
+    const qs = encodeState(s);
+    expect(qs).not.toContain('oe=');
+    expect(qs).not.toContain('oram=');
+    expect(qs).not.toContain('obw=');
+  });
+
   it('bad input → fallback', () => {
     expect(decodeState('', fallback)).toBe(fallback);
     expect(decodeState('garbage', fallback)).toBe(fallback);
@@ -64,11 +206,64 @@ describe('urlState', () => {
     expect(decodeState(good.replace('c=8192', 'c=abc'), fallback)).toBe(fallback);
     expect(decodeState(good.replace('c=8192', 'c='), fallback)).toBe(fallback);
     expect(decodeState(good.replace('at=mha_gqa', 'at=weird'), fallback)).toBe(fallback);
+    expect(decodeState(good.replace('rt=generic', 'rt=nope'), fallback)).toBe(fallback);
     expect(decodeState(good.replace(/&u=\d+/, ''), fallback)).toBe(fallback);
     expect(decodeState(`${good}&moe=1,2`, fallback)).toBe(fallback);
     expect(decodeState(`${good}&ff=1,2,1`, fallback)).toBe(fallback);
     expect(decodeState(`${good}&ff=1,2,yes,,,,`, fallback)).toBe(fallback);
     expect(decodeState(`${good}&ff=,2,1,,,,`, fallback)).toBe(fallback);
     expect(decodeState(`${good}&ff=1,2,0,x,,,`, fallback)).toBe(fallback);
+  });
+
+  it('round-trips file weights, and links without them still decode', () => {
+    const s: CalcState = {
+      ...fallback,
+      model: makeSpec({ fileWeights: { bytes: 18_556_686_080, label: 'Q4_K_M GGUF', quant: 'q4_k_m' } }),
+      quant: { weight: 'q4_k_m', kv: 'fp16' },
+    };
+    expect(decodeState(encodeState(s), fallback)).toEqual(s);
+    // `fwb` without `fwq` (never written by encodeState): the bytes are ignored, the rest decodes.
+    const noQuant = decodeState(`${encodeState(fallback)}&fwb=5000000000&fwl=IQ2_M%20GGUF`, fallback);
+    expect(noQuant).not.toBe(fallback);
+    expect(noQuant.model.fileWeights).toBeUndefined();
+    expect(decodeState(encodeState(fallback), fallback).model.fileWeights).toBeUndefined();
+    expect(decodeState(`${encodeState(fallback)}&fwb=-1&fwq=q4_k_m`, fallback)).toBe(fallback);
+  });
+});
+
+describe('urlState: speculative decoding', () => {
+  it('a state with no speculative field round-trips without one (old links keep working)', () => {
+    expect(decodeState(encodeState(fallback), fallback)).toEqual(fallback);
+    expect(encodeState(fallback)).not.toContain('se=');
+  });
+
+  it("round-trips a 'none' (n-gram) config", () => {
+    const s: CalcState = { ...fallback, speculative: { enabled: true, draftMode: 'none', draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 } };
+    expect(decodeState(encodeState(s), fallback)).toEqual(s);
+  });
+
+  it("round-trips a 'preset' draft model", () => {
+    const draft = MODEL_PRESETS.find((m) => m.id === 'meta-llama/Llama-3.1-8B-Instruct');
+    if (!draft) throw new Error('missing preset');
+    const s: CalcState = {
+      ...fallback,
+      speculative: { enabled: true, draftMode: 'preset', draftModel: draft, draftWeightQuant: 'q8_0', k: 6, alpha: 0.85 },
+    };
+    expect(decodeState(encodeState(s), fallback)).toEqual(s);
+  });
+
+  it("round-trips a 'custom' draft (params only)", () => {
+    const s: CalcState = {
+      ...fallback,
+      speculative: { enabled: true, draftMode: 'custom', draftParams: 1_500_000_000, draftWeightQuant: 'bf16', k: 4, alpha: 0.7 },
+    };
+    expect(decodeState(encodeState(s), fallback)).toEqual(s);
+  });
+
+  it('an unknown preset id in the URL falls back to no draft model', () => {
+    const qs = `${encodeState({ ...fallback, speculative: { enabled: true, draftMode: 'preset', draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 } })}&sd=nonexistent/model`;
+    const decoded = decodeState(qs, fallback);
+    expect(decoded.speculative?.draftMode).toBe('none');
+    expect(decoded.speculative?.draftModel).toBeUndefined();
   });
 });

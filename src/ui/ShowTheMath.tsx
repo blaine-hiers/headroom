@@ -1,13 +1,28 @@
 import type { ReactNode } from 'react';
 import {
   attentionParamsPerLayer,
+  cloudCostFor,
+  effectiveAggregateTokS,
   DECODE_EFFICIENCY,
   effectiveSlidingLayers,
+  effectiveVramGB,
+  findGpuPreset,
   formatNumber,
+  formatSeconds,
+  kvContextForRuntime,
+  formatUsd,
   KV_QUANTS,
   kvBytesPerTokenPerLayer,
+  llamaCppPerSlotContext,
+  RUNTIME_PROFILES,
+  SGLANG_MEM_FRACTION_STATIC,
+  resolveOffload,
+  splitByLayerFraction,
+  TP_PENALTY_PER_DOUBLING,
+  VLLM_GPU_MEMORY_UTILIZATION,
+  VLLM_KV_BLOCK_TOKENS,
+  VLLM_OVERHEAD_ALLOWANCE_GB,
   WEIGHT_QUANTS,
-  weightBytes,
 } from '../lib';
 import type { ActiveParamsMethod, CalcResult, CalcState } from '../lib';
 import { Bytes } from './Bytes';
@@ -63,20 +78,53 @@ function ActiveParamsStep({ state, active, method }: { state: CalcState; active:
 }
 
 export function ShowTheMath({ state, result }: Props) {
-  const { model, quant, hardware: hw, workload } = state;
+  const { model, quant, hardware: hw, workload, runtime = 'generic' } = state;
   const kvB = KV_QUANTS[quant.kv].bytesPerElement;
   const bits = WEIGHT_QUANTS[quant.weight].bitsPerWeight;
-  const perLayer = kvBytesPerTokenPerLayer(model, quant.kv);
+  const tp = result.tensorParallel;
+  const rawPerLayer = kvBytesPerTokenPerLayer(model, quant.kv);
+  const rawPerToken = rawPerLayer * model.numLayers;
+  // KV-head replication (numKvHeads < gpuCount) scales every layer's KV bytes equally.
+  const perLayer = rawPerLayer * tp.kvReplicationFactor;
   const sliding = effectiveSlidingLayers(model);
   const full = model.numLayers - sliding;
   const C = Math.floor(workload.contextTokens);
   const N = Math.floor(workload.concurrentUsers);
-  const fixed = result.weightBytes + result.overheadBytes;
+  const kvCtx = kvContextForRuntime(C, runtime);
+  // Everything that doesn't scale with users, as fit.ts computes it: includes the draft
+  // model's weights when speculation is on, and only the weights system RAM can't hold when offload is on.
+  const fixed = result.fixedBytes;
   const active = result.activeParams;
   const method = result.activeParamsMethod;
-  const activeBytes = weightBytes(active, quant.weight);
+  const activeBytes = result.activeWeightBytes;
+  const fromFiles = result.weightSource === 'files';
   const B = (v: number) => <Bytes value={v} />;
   const maxU = result.maxUsersAtContext;
+
+  const gpu = findGpuPreset(hw.gpuName);
+  const isAppleGpu = gpu?.vendor === 'apple';
+  const effectiveVram = effectiveVramGB(hw.gpuName, hw.vramGB, hw.appleWiredLimitGB);
+  const appleNote = isAppleGpu && hw.vramGB !== effectiveVram ? ` (using wired limit ${n(effectiveVram, 2)} GB)` : '';
+
+  const usableFormula =
+    runtime === 'vllm'
+      ? `gpuCount × effectiveVramGB × 1e9 × gpu_memory_utilization (${VLLM_GPU_MEMORY_UTILIZATION})`
+      : runtime === 'sglang'
+        ? `gpuCount × effectiveVramGB × 1e9 × mem_fraction_static (${SGLANG_MEM_FRACTION_STATIC})`
+        : isAppleGpu
+          ? 'gpuCount × effectiveVramGB × 1e9 × (1 − reserve%/100)'
+          : 'gpuCount × vramGB × 1e9 × (1 − reserve%/100)';
+  const usableSub =
+    runtime === 'vllm'
+      ? `${n(hw.gpuCount)} × ${n(effectiveVram, 2)} × 1e9 × ${VLLM_GPU_MEMORY_UTILIZATION}`
+      : runtime === 'sglang'
+        ? `${n(hw.gpuCount)} × ${n(effectiveVram, 2)} × 1e9 × ${SGLANG_MEM_FRACTION_STATIC}`
+        : `${n(hw.gpuCount)} × ${n(effectiveVram, 2)} × 1e9 × (1 − ${n(hw.reservePct, 2)}/100)`;
+  const cost = cloudCostFor(state, result);
+  const offload = resolveOffload(hw.offload);
+  const offloadPlan = result.offload;
+  const activeSplit = splitByLayerFraction(activeBytes, offloadPlan.gpuLayers, model.numLayers);
+  const gpuAvailable = result.usableBytes - result.overheadBytes - result.kvBytesAllUsers;
 
   return (
     <details className="card math">
@@ -87,51 +135,112 @@ export function ShowTheMath({ state, result }: Props) {
             title="KV per token (MLA)"
             formula="layers × (kv_lora_rank + qk_rope_head_dim) × kvBytes"
             sub={`${n(model.numLayers)} × (${n(model.kvLoraRank ?? 0)} + ${n(model.qkRopeHeadDim ?? 0)}) × ${kvB}`}
-            result={<>{n(result.kvBytesPerToken)} B ({B(result.kvBytesPerToken)})</>}
+            result={<>{n(rawPerToken)} B ({B(rawPerToken)})</>}
           />
         ) : (
           <Step
             title="KV per token"
             formula="2 × layers × kvHeads × headDim × kvBytes"
             sub={`2 × ${n(model.numLayers)} × ${n(model.numKvHeads)} × ${n(model.headDim)} × ${kvB}`}
+            result={<>{n(rawPerToken)} B ({B(rawPerToken)})</>}
+          />
+        )}
+        {tp.kvHeadsReplicated && (
+          <Step
+            title={tp.kvHeadsSplitValid ? 'KV-head replication (tensor parallel)' : 'KV-head replication (uneven split — worst case)'}
+            formula="KV per token × (gpuCount / numKvHeads)"
+            sub={`${n(rawPerToken)} × (${tp.gpuCount} / ${n(model.numKvHeads)})`}
             result={<>{n(result.kvBytesPerToken)} B ({B(result.kvBytesPerToken)})</>}
+          />
+        )}
+        {runtime === 'vllm' && kvCtx !== C && (
+          <Step
+            title="Context rounded to vLLM's paged-KV block size"
+            formula={`ceil(C / ${VLLM_KV_BLOCK_TOKENS}) × ${VLLM_KV_BLOCK_TOKENS}`}
+            sub={`ceil(${n(C)} / ${VLLM_KV_BLOCK_TOKENS}) × ${VLLM_KV_BLOCK_TOKENS}`}
+            result={`${n(kvCtx)} tokens`}
           />
         )}
         {sliding > 0 ? (
           <Step
             title="KV per request (sliding-window split)"
             formula="perLayer × (fullLayers × C + slidingLayers × min(C, window))"
-            sub={`${n(perLayer)} × (${n(full)} × ${n(C)} + ${n(sliding)} × ${n(Math.min(C, model.slidingWindow ?? 0))})`}
+            sub={`${n(perLayer)} × (${n(full)} × ${n(kvCtx)} + ${n(sliding)} × ${n(Math.min(kvCtx, model.slidingWindow ?? 0))})`}
             result={B(result.kvBytesPerRequest)}
           />
         ) : (
           <Step
             title="KV per request"
             formula="KV per token × C"
-            sub={`${n(result.kvBytesPerToken)} × ${n(C)}`}
+            sub={`${n(result.kvBytesPerToken)} × ${n(kvCtx)}`}
             result={B(result.kvBytesPerRequest)}
           />
         )}
+        {runtime === 'llamacpp' && (
+          <Step
+            title="Per-slot context (llama.cpp: -c shared across -np slots)"
+            formula="floor((C × N) / N)"
+            sub={`floor((${n(C)} × ${n(N)}) / ${n(N)})`}
+            result={`${n(llamaCppPerSlotContext(C * N, N))} tokens${llamaCppPerSlotContext(C * N, N) < C ? ' — below the chosen context' : ''}`}
+          />
+        )}
         <Step title="KV for all users" formula="KV per request × N" sub={`${n(result.kvBytesPerRequest)} × ${n(N)}`} result={B(result.kvBytesAllUsers)} />
+        {fromFiles ? (
+          <Step
+            title={`Weights (from repo files: ${model.fileWeights?.label ?? ''})`}
+            formula="sum of the weight files' sizes"
+            sub={`${n(result.weightBytes)} B`}
+            result={B(result.weightBytes)}
+          />
+        ) : (
+          <Step
+            title="Weights"
+            formula="params × bitsPerWeight / 8"
+            sub={`${n(model.params)} × ${bits} / 8`}
+            result={B(result.weightBytes)}
+          />
+        )}
         <Step
-          title="Weights"
-          formula="params × bitsPerWeight / 8"
-          sub={`${n(model.params)} × ${bits} / 8`}
-          result={B(result.weightBytes)}
-        />
-        <Step
-          title="Usable VRAM"
-          formula="gpuCount × vramGB × 1e9 × (1 − reserve%/100)"
-          sub={`${n(hw.gpuCount)} × ${n(hw.vramGB, 2)} × 1e9 × (1 − ${n(hw.reservePct, 2)}/100)`}
+          title={`Usable VRAM (${RUNTIME_PROFILES[runtime].label})${appleNote}`}
+          formula={usableFormula}
+          sub={usableSub}
           result={B(result.usableBytes)}
         />
+        {result.speculative.enabled ? (
+          <Step
+            title="Total VRAM"
+            formula="weights + draftWeights + overheadGB × 1e9 × gpuCount + N × (KV per request + draft KV per request)"
+            sub={
+              <>
+                {n(result.weightBytes)} + {n(result.speculative.memory.weightBytes)} + {n(hw.overheadGB, 2)} × 1e9 × {n(hw.gpuCount)} + {n(N)} × (
+                {n(result.kvBytesPerRequest)} + {n(result.speculative.memory.kvBytesPerRequest)})
+              </>
+            }
+            result={
+              <>
+                {B(result.totalBytes)} ({result.fits ? 'fits' : 'does not fit'} in {formatNumber(result.usableBytes)} B)
+              </>
+            }
+          />
+        ) : (
         <Step
           title="Total VRAM"
-          formula="weights + overheadGB × 1e9 × gpuCount + N × KV per request"
+          formula={
+            runtime === 'vllm'
+              ? `weights + (overheadGB × 1e9 × gpuCount + ${VLLM_OVERHEAD_ALLOWANCE_GB} × 1e9 × gpuCount) + N × KV per request`
+              : 'weights + overheadGB × 1e9 × gpuCount + N × KV per request'
+          }
           sub={
-            <>
-              {formatNumber(result.weightBytes)} + {n(hw.overheadGB, 2)} × 1e9 × {n(hw.gpuCount)} + {n(N)} × {n(result.kvBytesPerRequest)}
-            </>
+            runtime === 'vllm' ? (
+              <>
+                {formatNumber(result.weightBytes)} + ({n(hw.overheadGB, 2)} × 1e9 × {n(hw.gpuCount)} + {VLLM_OVERHEAD_ALLOWANCE_GB} × 1e9 × {n(hw.gpuCount)}) + {n(N)}{' '}
+                × {n(result.kvBytesPerRequest)}
+              </>
+            ) : (
+              <>
+                {formatNumber(result.weightBytes)} + {n(hw.overheadGB, 2)} × 1e9 × {n(hw.gpuCount)} + {n(N)} × {n(result.kvBytesPerRequest)}
+              </>
+            )
           }
           result={
             <>
@@ -139,30 +248,172 @@ export function ShowTheMath({ state, result }: Props) {
             </>
           }
         />
+        )}
         <Step
           title="Max users at C"
-          formula="floor((usable − fixed) / KV per request)"
-          sub={`floor((${n(result.usableBytes)} − ${n(fixed)}) / ${n(result.kvBytesPerRequest)})`}
+          formula={result.speculative.enabled ? 'floor((usable − fixed) / (KV per request + draft KV per request))' : 'floor((usable − fixed) / KV per request)'}
+          sub={
+            result.speculative.enabled
+              ? `floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(result.kvBytesPerRequest)} + ${n(result.speculative.memory.kvBytesPerRequest)}))`
+              : `floor((${n(result.usableBytes)} − ${n(fixed)}) / ${n(result.kvBytesPerRequest)})`
+          }
           result={Number.isFinite(maxU) ? n(maxU) : '∞'}
         />
         <Step
           title="Max context for N users"
-          formula="min(maxPosition, floor((usable − fixed) / (N × KV per token)))"
-          sub={`min(${n(model.maxPositionEmbeddings)}, floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)})))`}
-          result={`${n(result.maxContextForUsers)} tokens`}
+          formula={
+            result.speculative.enabled
+              ? 'min(maxPosition, floor((usable − fixed) / (N × (KV per token + draft KV per token))))'
+              : runtime === 'vllm'
+                ? `min(maxPosition, ${VLLM_KV_BLOCK_TOKENS} × floor((usable − fixed) / (N × KV per token) / ${VLLM_KV_BLOCK_TOKENS}))`
+                : 'min(maxPosition, floor((usable − fixed) / (N × KV per token)))'
+          }
+          sub={
+            result.speculative.enabled
+              ? `min(${n(model.maxPositionEmbeddings)}, floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × (${n(result.kvBytesPerToken)} + ${n(result.speculative.memory.kvBytesPerToken)}))))`
+              : runtime === 'vllm'
+                ? `min(${n(model.maxPositionEmbeddings)}, ${VLLM_KV_BLOCK_TOKENS} × floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)}) / ${VLLM_KV_BLOCK_TOKENS}))`
+                : `min(${n(model.maxPositionEmbeddings)}, floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)})))`
+          }
+          result={`${n(result.maxContextForUsers)} tokens${runtime === 'vllm' ? ' (rounded down to a block multiple, so it always fits)' : ''}`}
         />
         <ActiveParamsStep state={state} active={active} method={method} />
+        {fromFiles && model.params > 0 && (
+          <Step
+            title="Active weights (share of the repo files)"
+            formula="fileBytes × activeParams / params"
+            sub={`${n(result.weightBytes)} × ${n(active)} / ${n(model.params)}`}
+            result={B(activeBytes)}
+          />
+        )}
+        {hw.gpuCount > 1 && (
+          <Step
+            title="Tensor-parallel communication penalty"
+            formula={`decodeEfficiency × ${TP_PENALTY_PER_DOUBLING}^log2(gpuCount)`}
+            sub={`decodeEfficiency × ${TP_PENALTY_PER_DOUBLING}^log2(${n(hw.gpuCount)})`}
+            result={n(result.throughput.efficiency, 3)}
+          />
+        )}
         <Step
           title="Decode throughput"
           formula="bandwidthGBs × 1e9 × gpuCount × efficiency / (activeWeights + N × KV per request)"
           sub={
             <>
-              {n(hw.bandwidthGBs)} × 1e9 × {n(hw.gpuCount)} × {DECODE_EFFICIENCY} / ({n(activeBytes)} + {n(N)} × {n(result.kvBytesPerRequest)})
+              {n(hw.bandwidthGBs)} × 1e9 × {n(hw.gpuCount)} × {n(result.throughput.efficiency, 3)} / ({n(activeBytes)} + {n(N)} × {n(result.kvBytesPerRequest)})
             </>
           }
           result={`${n(result.throughput.perUserTokS, 1)} tok/s per user, ${n(result.throughput.aggregateTokS, 1)} tok/s aggregate`}
         />
+        {cost && (
+          <Step
+            title="Cloud cost"
+            formula="costPerHour = usdPerHour × gpuCount; $/1M output tokens = costPerHour / (aggregateTokS × 3600) × 1e6"
+            sub={`${n(hw.usdPerHour ?? 0, 2)} × ${n(hw.gpuCount)}; ${formatUsd(cost.costPerHour)} / (${n(effectiveAggregateTokS(result), 1)} × 3600) × 1e6`}
+            result={
+              <>
+                {formatUsd(cost.costPerHour)}/hr, {cost.atCurrentUsers !== undefined ? `${formatUsd(cost.atCurrentUsers)}/1M tok at N users` : '—'}, best case at max users
+                {' '}
+                {cost.atMaxUsers !== undefined ? `${formatUsd(cost.atMaxUsers)}/1M tok` : '—'}
+              </>
+            }
+          />
+        )}
+        <Step
+          title={`Prefill / time to first token (compute-bound, BF16${result.prefill.headsSource === 'hiddenSize-fallback' ? ', head count unknown → hiddenSize used' : ''})`}
+          formula="[2 × activeParams × C + 2 × layers × C² × queryWidth] / (tflopsBf16 × 1e12 × gpuCount × MFU)"
+          sub={`[2 × ${n(active)} × ${n(C)} + 2 × ${n(model.numLayers)} × ${n(C)}² × queryWidth] / (${n(hw.tflopsBf16, 1)} × 1e12 × ${n(hw.gpuCount)} × ${result.prefill.mfu})`}
+          result={`${n(result.prefill.flops)} FLOPs → ${formatSeconds(result.prefill.ttftSeconds)}`}
+        />
+        {offload.enabled && (
+          <>
+            <Step
+              title="Offload: bytes per layer"
+              formula="weights / numLayers"
+              sub={`${n(result.weightBytes)} / ${n(model.numLayers)}`}
+              result={B(offloadPlan.bytesPerLayer)}
+            />
+            <Step
+              title="Offload: GPU bytes available for weights"
+              formula="usable − overhead − KV for all users"
+              sub={`${n(result.usableBytes)} − ${n(result.overheadBytes)} − ${n(result.kvBytesAllUsers)}`}
+              result={B(Math.max(0, gpuAvailable))}
+            />
+            <Step
+              title="Offload: layers on GPU (-ngl)"
+              formula="clamp(floor(available / bytesPerLayer), 0, numLayers)"
+              sub={`floor(${n(gpuAvailable)} / ${n(offloadPlan.bytesPerLayer)})`}
+              result={`${n(offloadPlan.gpuLayers)} of ${n(model.numLayers)} on GPU, ${n(offloadPlan.cpuLayers)} in RAM`}
+            />
+            <Step
+              title="Offload: does the split actually run?"
+              formula="(available ≥ 0) and (cpuWeightBytes ≤ systemRamGB × 1e9)"
+              sub={
+                <>
+                  ({n(gpuAvailable)} ≥ 0) and ({n(offloadPlan.cpuWeightBytes)} ≤ {n(offload.systemRamGB)} × 1e9)
+                </>
+              }
+              result={
+                offloadPlan.fitsInRam
+                  ? 'yes'
+                  : gpuAvailable < 0
+                    ? 'no — KV + overhead alone exceed usable VRAM; no amount of RAM fixes that'
+                    : 'no — the RAM-resident layers do not fit in system RAM'
+              }
+            />
+            <Step
+              title="Offload: fixed GPU cost for max users / max context"
+              formula="overhead + draft weights + weights system RAM can't hold (fewest whole layers)"
+              sub={`${n(result.overheadBytes)} + ${n(result.speculative.memory.weightBytes)} + ${n(result.fixedBytes - result.overheadBytes - result.speculative.memory.weightBytes)}`}
+              result={<>{B(result.fixedBytes)} (every other layer can spill to RAM to make room for KV)</>}
+            />
+            <Step
+              title="Offload: decode throughput"
+              formula="1 / ((gpuActive + N×KV) / gpuBandwidth + cpuActive / ramBandwidth)"
+              sub={
+                <>
+                  1 / (({n(activeSplit.gpu)} + {n(N)} × {n(result.kvBytesPerRequest)}) / ({n(hw.bandwidthGBs)} × 1e9 ×{' '}
+                  {n(hw.gpuCount)} × {n(result.throughput.efficiency, 3)}) + {n(activeSplit.cpu)} / ({n(offload.ramBandwidthGBs)} × 1e9 × {n(DECODE_EFFICIENCY, 2)}))
+                </>
+              }
+              result={`${n(result.throughput.perUserTokS, 1)} tok/s per user, ${n(result.throughput.aggregateTokS, 1)} tok/s aggregate`}
+            />
+          </>
+        )}
+        {result.speculative.enabled && state.speculative && (
+          <>
+            {result.speculative.memory.totalBytes > 0 && (
+              <Step
+                title="Draft model memory"
+                formula="draftWeightBytes + N × draftKvBytesPerRequest"
+                sub={`${n(result.speculative.memory.weightBytes)} + ${n(N)} × ${n(result.speculative.memory.kvBytesPerRequest)}`}
+                result={B(result.speculative.memory.totalBytes)}
+              />
+            )}
+            <Step
+              title="Expected tokens per verify step"
+              formula="(1 − α^(k+1)) / (1 − α), limit k+1 at α = 1"
+              sub={`α = ${n(state.speculative.alpha, 2)}, k = ${n(state.speculative.k)}`}
+              result={n(result.speculative.throughput.expectedTokensPerStep, 3)}
+            />
+            <Step
+              title="Verify step time"
+              formula="targetStepSeconds + k × draftStepSeconds"
+              sub={`${n(result.speculative.throughput.targetStepSeconds * 1000, 3)} ms + ${n(state.speculative.k)} × ${n(result.speculative.throughput.draftStepSeconds * 1000, 3)} ms`}
+              result={`${n(result.speculative.throughput.verifyStepSeconds * 1000, 3)} ms`}
+            />
+            <Step
+              title="Speculative decode throughput"
+              formula="expectedTokensPerStep / verifyStepSeconds"
+              sub={`${n(result.speculative.throughput.expectedTokensPerStep, 3)} / ${n(result.speculative.throughput.verifyStepSeconds, 6)} s`}
+              result={`${n(result.speculative.throughput.perUserTokS, 1)} tok/s per user (×${n(result.speculative.throughput.multiplier, 2)} vs no speculation)`}
+            />
+          </>
+        )}
       </ol>
+      {hw.gpuCount > 1 && (
+        <p className="help">Multi-GPU numbers assume tensor-parallel bandwidth pooling and ignore all-reduce communication cost beyond this penalty.</p>
+      )}
+      {offload.enabled && <p className="help">KV cache always stays on the GPU (llama.cpp's default) — only weights are split between GPU and RAM.</p>}
     </details>
   );
 }

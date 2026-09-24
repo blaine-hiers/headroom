@@ -1,16 +1,24 @@
-import { formatNumber, formatTokens, KV_QUANTS, WEIGHT_QUANTS } from '../lib';
-import type { ActiveParamsMethod, CalcResult, CalcState } from '../lib';
+import { effectiveBitsPerWeight, formatNumber, formatSeconds, formatTokens, KV_QUANTS, resolveOffload, WEIGHT_QUANTS } from '../lib';
+import type { ActiveParamsMethod, CalcResult, CalcState, WeightQuantKey } from '../lib';
 import { Bytes } from './Bytes';
 import { Chart } from './Chart';
+import { ExportBar } from './ExportBar';
+import { FitMatrix } from './FitMatrix';
+import { LaunchCommand } from './LaunchCommand';
+import { CostCard } from './CostCard';
 import { ShowTheMath } from './ShowTheMath';
 import { fitLevel } from './state';
+import type { FitLevel } from './state';
 
 interface Props {
   state: CalcState;
   result: CalcResult;
+  onApplyFit: (weight: WeightQuantKey, contextTokens: number) => void;
+  /** Writes the current state into the URL and returns the full shareable link. */
+  getLink: () => string;
 }
 
-const BADGE_TEXT = { fits: 'Fits', tight: 'Tight', nofit: 'Does not fit' } as const;
+const BADGE_TEXT: Record<FitLevel, string> = { fits: 'Fits', tight: 'Tight', nofit: 'Does not fit', offloaded: 'Offloaded' };
 
 const METHOD_LABEL: Record<ActiveParamsMethod, string> = {
   dense: 'dense, all params',
@@ -24,12 +32,38 @@ const billions = (n: number) => `${formatNumber(n / 1e9, 2)}B`;
 const users = (n: number) => (Number.isFinite(n) ? formatNumber(n) : '∞');
 const tokS = (v: number) => (v > 0 && Number.isFinite(v) ? formatNumber(v, v < 10 ? 1 : 0) : '—');
 
-export function Results({ state, result }: Props) {
+/** "1, 2, 4 or 8" */
+const listWithOr = (nums: number[]) =>
+  nums.length <= 1 ? (nums[0]?.toString() ?? '') : `${nums.slice(0, -1).join(', ')} or ${nums[nums.length - 1]}`;
+
+function tensorParallelWarnings(tp: CalcResult['tensorParallel'], numKvHeads: number): string[] {
+  const msgs: string[] = [];
+  // Shared across both messages: suggestions already satisfy the head-count AND KV-head checks.
+  const suggestion = tp.suggestedGpuCounts.length > 0 ? `; use ${listWithOr(tp.suggestedGpuCounts)}` : '';
+  if (tp.checkable && !tp.headsDivisible) {
+    msgs.push(`${tp.gpuCount} GPUs can't evenly split ${formatNumber(tp.numAttentionHeads ?? 0)} attention heads for tensor parallelism${suggestion}`);
+  }
+  if (tp.kvHeadsReplicated && !tp.kvHeadsSplitValid) {
+    msgs.push(`${tp.gpuCount} GPUs can't evenly split or replicate ${formatNumber(numKvHeads)} KV heads for tensor parallelism${suggestion}`);
+  } else if (tp.kvHeadsReplicated) {
+    // Not MLA (kvHeadsReplicated is always false there): fewer KV heads than GPUs still lays
+    // out evenly, but every GPU holding a full replicated head raises the per-GPU KV size.
+    msgs.push(`Fewer KV heads than GPUs: KV heads are replicated, raising per-GPU KV size ×${formatNumber(tp.kvReplicationFactor, 2)}.`);
+  }
+  return msgs;
+}
+
+export function Results({ state, result, onApplyFit, getLink }: Props) {
   const { workload, quant, hardware, model } = state;
   const N = workload.concurrentUsers;
   const C = workload.contextTokens;
-  const level = fitLevel(result.fits, result.headroomBytes, result.usableBytes);
-  const fixedTooBig = result.weightBytes + result.overheadBytes > result.usableBytes;
+  const offloadEnabled = resolveOffload(hardware.offload).enabled;
+  const offloaded = offloadEnabled && result.offload.cpuLayers > 0;
+  // Offload replaces the classic fits/tight/nofit badge only once it actually moves layers to RAM.
+  const level: FitLevel = offloaded ? (result.offload.fitsInRam ? 'offloaded' : 'nofit') : fitLevel(result.fits, result.headroomBytes, result.usableBytes);
+  // fixedBytes already accounts for offload (only the weights RAM can't hold stay fixed) when it's on.
+  const fixedTooBig = result.fixedBytes > result.usableBytes;
+  const tpWarnings = tensorParallelWarnings(result.tensorParallel, model.numKvHeads);
 
   return (
     <div className="results">
@@ -41,13 +75,13 @@ export function Results({ state, result }: Props) {
           {BADGE_TEXT[level]}
         </div>
         <p className="verdict-detail">
-          {result.fits ? (
+          {result.runs ? (
             <>
-              <Bytes value={result.headroomBytes} /> headroom
+              <Bytes value={result.runHeadroomBytes} /> headroom{offloaded ? ' for more KV (layers in RAM)' : ''}
             </>
           ) : (
             <>
-              <Bytes value={-result.headroomBytes} /> short
+              <Bytes value={-result.runHeadroomBytes} /> short{offloadEnabled ? ' (even with CPU/RAM offload)' : ''}
             </>
           )}
           <span className="muted">
@@ -55,6 +89,20 @@ export function Results({ state, result }: Props) {
             · {hardware.gpuCount} × {hardware.gpuName}, {formatNumber(N)} user{N === 1 ? '' : 's'} @ {formatTokens(C)}
           </span>
         </p>
+        {offloadEnabled && (
+          <p className="verdict-detail muted">
+            <code>-ngl {formatNumber(result.offload.gpuLayers)}</code> of {formatNumber(model.numLayers)} layers on
+            GPU, {formatNumber(result.offload.cpuLayers)} in system RAM
+            {result.offload.cpuLayers > 0 && !result.offload.fitsInRam ? ' — does not fit in system RAM either' : ''}
+          </p>
+        )}
+        {tpWarnings.length > 0 && (
+          <ul className="warnings" aria-label="Tensor-parallel notes">
+            {tpWarnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <div className="cards">
@@ -66,9 +114,16 @@ export function Results({ state, result }: Props) {
         <div className="card stat">
           <h3>Weights</h3>
           <Bytes value={result.weightBytes} stacked />
-          <p className="muted">
-            {WEIGHT_QUANTS[quant.weight].label}, {WEIGHT_QUANTS[quant.weight].bitsPerWeight} bits/weight
-          </p>
+          {result.weightSource === 'files' ? (
+            <p className="muted weight-source">
+              {model.fileWeights?.label}, from repo files
+              {model.params > 0 && <>, {formatNumber(effectiveBitsPerWeight(result.weightBytes, model.params), 2)} bits/weight effective</>}
+            </p>
+          ) : (
+            <p className="muted weight-source">
+              {WEIGHT_QUANTS[quant.weight].label}, {WEIGHT_QUANTS[quant.weight].bitsPerWeight} bits/weight, estimated
+            </p>
+          )}
           <p className="muted active-params">
             {billions(result.activeParams)} active per token ({METHOD_LABEL[result.activeParamsMethod]})
           </p>
@@ -87,6 +142,7 @@ export function Results({ state, result }: Props) {
           <Bytes value={result.totalBytes} stacked />
           <p className="muted">
             of <Bytes value={result.usableBytes} /> usable
+            {result.speculative.enabled && result.speculative.memory.totalBytes > 0 && ' (includes the draft model)'}
           </p>
         </div>
       </div>
@@ -95,7 +151,11 @@ export function Results({ state, result }: Props) {
         <div className="card callout">
           <h3>Max users at {formatTokens(C)}</h3>
           <p className="big num">{users(result.maxUsersAtContext)}</p>
-          <p className="muted">{fixedTooBig ? 'weights + overhead alone exceed usable VRAM' : 'concurrent requests, each at full context'}</p>
+          <p className="muted">
+            {fixedTooBig
+              ? `${offloadEnabled ? 'weights that do not fit in system RAM' : 'weights'} + overhead${result.speculative.memory.weightBytes > 0 ? ' + draft weights' : ''} alone exceed usable VRAM`
+              : 'concurrent requests, each at full context'}
+          </p>
         </div>
         <div className="card callout">
           <h3>
@@ -144,6 +204,8 @@ export function Results({ state, result }: Props) {
         </div>
       </div>
 
+      <FitMatrix state={state} onApply={onApplyFit} />
+
       <div className="card">
         <h3>Decode throughput</h3>
         <div className="tput">
@@ -155,12 +217,54 @@ export function Results({ state, result }: Props) {
             <p className="big num">{tokS(result.throughput.aggregateTokS)}</p>
             <p className="muted">tok/s aggregate</p>
           </div>
+          <div>
+            <p className="big num">{formatSeconds(result.prefill.ttftSeconds)}</p>
+            <p className="muted">time to first token (1 user)</p>
+          </div>
         </div>
-        <p className="help">bandwidth-bound decode estimate, ×{result.throughput.efficiency} efficiency; prefill not included</p>
+        <p className="help">
+          bandwidth-bound decode estimate, ×{formatNumber(result.throughput.efficiency, 3)} efficiency
+          {hardware.gpuCount > 1 && ' (includes an estimated tensor-parallel communication penalty; see Show the math)'}
+          {offloaded && ' (includes the CPU/RAM-offloaded layers; see Show the math)'}
+        </p>
+        <p className="help">
+          TTFT is a compute-bound estimate, BF16 rate, ×{result.prefill.mfu} MFU
+          {result.prefill.headsSource === 'hiddenSize-fallback' ? '; head count unknown, hiddenSize used in its place' : ''}
+        </p>
       </div>
 
+      <CostCard state={state} result={result} />
+      {result.speculative.enabled && (
+        <div className="card">
+          <h3>Decode throughput (speculative)</h3>
+          <div className="tput">
+            <div>
+              <p className="big num">{tokS(result.speculative.throughput.perUserTokS)}</p>
+              <p className="muted">tok/s per user</p>
+            </div>
+            <div>
+              <p className="big num">{tokS(result.speculative.throughput.aggregateTokS)}</p>
+              <p className="muted">tok/s aggregate</p>
+            </div>
+          </div>
+          <p className="help">
+            ×{formatNumber(result.speculative.throughput.multiplier, 2)} vs no speculation ·{' '}
+            {formatNumber(result.speculative.throughput.expectedTokensPerStep, 2)} expected tokens/verify step. Helps most at low
+            concurrency — KV-cache reads dominate both models' steps as concurrent users grow, shrinking the gain.
+          </p>
+          {result.speculative.memory.totalBytes > 0 && (
+            <p className="muted">
+              Draft model adds <Bytes value={result.speculative.memory.totalBytes} /> to VRAM (
+              <Bytes value={result.speculative.memory.weightBytes} /> weights + <Bytes value={result.speculative.memory.kvBytesAllUsers} /> KV).
+            </p>
+          )}
+        </div>
+      )}
+
       <Chart result={result} users={N} />
+      <LaunchCommand state={state} />
       <ShowTheMath state={state} result={result} />
+      <ExportBar state={state} result={result} getLink={getLink} />
       <p className="caveat muted">Estimates, not benchmarks. Real runtimes add activation memory, fragmentation, and their own KV block rounding.</p>
     </div>
   );

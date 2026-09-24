@@ -19,10 +19,11 @@ function niceStep(range: number, target: number): number {
   return nice * mag;
 }
 
-/** Total VRAM vs concurrent users (a straight line: fixed + N × KV per request). */
+/** Total VRAM vs concurrent users (a straight line: fixedBytes + N × bytesPerUser). Matches totalBytes/fits exactly, including the draft model's cost when speculative decoding is enabled. */
 export function Chart({ result, users }: Props) {
-  const fixed = result.weightBytes + result.overheadBytes;
-  const kv = result.kvBytesPerRequest;
+  // fixedBytes/bytesPerUser already account for CPU/RAM offload when it's on (see fit.ts).
+  const fixed = result.fixedBytes;
+  const kv = result.bytesPerUser;
   const usable = result.usableBytes;
   const total = (n: number) => fixed + n * kv;
 

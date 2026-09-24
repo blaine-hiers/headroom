@@ -13,6 +13,7 @@
   --faint: #5d6570;
   --accent: #6aa8ff;
   --accent-contrast: #06101f;
+  --accent-bg: rgba(106, 168, 255, 0.13);
   --ok: #3ecf7a;
   --ok-bg: rgba(62, 207, 122, 0.12);
   --warn: #f0b23d;
@@ -41,6 +42,7 @@
   --faint: #8a929d;
   --accent: #1f6fe0;
   --accent-contrast: #ffffff;
+  --accent-bg: rgba(31, 111, 224, 0.1);
   --ok: #178a4a;
   --ok-bg: rgba(23, 138, 74, 0.1);
   --warn: #a86a00;
@@ -134,7 +136,8 @@ input[type='number'] {
 }
 
 .inputs,
-.results {
+.results,
+.results-stack {
   display: grid;
   gap: var(--gutter);
   min-width: 0;
@@ -327,6 +330,59 @@ select optgroup {
   flex: 1;
 }
 
+/* repo id combobox */
+
+.combobox-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.combobox-list {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.combobox-option {
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.combobox-option.is-active,
+.combobox-option:hover {
+  background: var(--chosen-bg);
+}
+
+.combobox-id {
+  font-family: var(--mono);
+}
+
+.combobox-gated {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
 .grid2,
 .grid3 {
   display: grid;
@@ -411,6 +467,35 @@ input[type='range'] {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--chosen-bg);
+}
+
+.chip-with-remove {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin: 0;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: bold;
+  line-height: 1;
+}
+
+.chip-remove:hover {
+  color: var(--text);
+  background: var(--surface-3);
 }
 
 .status {
@@ -515,6 +600,10 @@ input[type='range'] {
   min-width: 0;
 }
 
+.verdict .warnings {
+  flex-basis: 100%;
+}
+
 .verdict-fits {
   border-color: var(--ok);
 }
@@ -540,6 +629,15 @@ input[type='range'] {
 .verdict-nofit .badge {
   color: var(--bad);
   background: var(--bad-bg);
+}
+
+.verdict-offloaded {
+  border-color: var(--accent);
+}
+
+.verdict-offloaded .badge {
+  color: var(--accent);
+  background: var(--accent-bg);
 }
 
 .cards {
@@ -613,6 +711,58 @@ tr.over-max .tag {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--accent);
+}
+
+/* fit matrix */
+
+.fit-matrix-table th,
+.fit-matrix-table td {
+  text-align: center;
+}
+
+.fit-matrix-table th[scope='row'] {
+  text-align: left;
+  white-space: nowrap;
+}
+
+.fit-matrix-cell-wrap {
+  padding: 3px !important;
+}
+
+.fit-cell {
+  width: 100%;
+  min-width: 52px;
+  min-height: 34px;
+  padding: 4px 6px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.fit-cell-fits {
+  background: var(--ok-bg);
+  color: var(--ok);
+}
+
+.fit-cell-tight {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.fit-cell-nofit {
+  background: var(--bad-bg);
+  color: var(--bad);
+}
+
+.fit-cell[aria-pressed='true'] {
+  border-color: var(--accent);
+}
+
+.fit-cell:hover {
+  filter: brightness(1.15);
 }
 
 /* chart */
@@ -696,6 +846,32 @@ tr.over-max .tag {
   fill: var(--bad);
 }
 
+/* launch command */
+
+.code-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.code-block pre {
+  flex: 1;
+  margin: 0;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.code-block code {
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* show the math */
 
 .math summary {
@@ -728,6 +904,63 @@ tr.over-max .tag {
 
 .caveat {
   font-size: 12px;
+}
+
+/* compare mode */
+
+.compare-table-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.compare-table-head h3 {
+  margin-bottom: 0;
+}
+
+.compare-col-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.compare-select {
+  min-height: 26px;
+  padding: 2px 10px;
+  font-weight: 600;
+}
+
+.compare-selected {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--chosen-bg);
+}
+
+.compare-remove {
+  font-size: 11px;
+}
+
+.compare-summary {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  margin-top: 4px;
+  max-width: 22ch;
+}
+
+td.compare-best {
+  color: var(--ok);
+  font-weight: 600;
+  background: var(--ok-bg);
+}
+
+@media (max-width: 800px) {
+  .compare-table .table-wrap {
+    max-height: 70vh;
+  }
 }
 
 @media (max-width: 480px) {

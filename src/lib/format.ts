@@ -45,3 +45,18 @@ export function formatTokens(n: number): string {
   if (abs >= 1024) return `${Number((n / 1024).toFixed(1))}K`;
   return String(Math.round(n));
 }
+
+/** USD amounts: "$6.52", "$104.32", "$0.0042" (finer precision below a cent so small $/1M-token figures don't round to $0.00). */
+export function formatUsd(n: number): string {
+  if (!Number.isFinite(n)) return DASH;
+  const decimals = n !== 0 && Math.abs(n) < 0.01 ? 4 : 2;
+  return `$${n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
+}
+
+/** Seconds → "120 ms", "1.2 s", "3.4 min" for TTFT-scale durations. */
+export function formatSeconds(s: number): string {
+  if (!Number.isFinite(s) || s < 0) return DASH;
+  if (s < 1) return `${sig3(s * 1000)} ms`;
+  if (s < 60) return `${sig3(s)} s`;
+  return `${sig3(s / 60)} min`;
+}

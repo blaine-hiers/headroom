@@ -1,11 +1,18 @@
+import { findGpuPreset } from './presets/gpus';
+import { findModelPreset } from './presets/models';
+import { DEFAULT_OFFLOAD, resolveOffload } from './offload';
 import { KV_QUANTS, WEIGHT_QUANTS } from './quant';
+import { RUNTIME_KEYS } from './runtime';
+import { DEFAULT_DRAFT_ALPHA, DEFAULT_DRAFT_K } from './speculative';
 import type {
   Attention,
   CalcState,
+  DraftMode,
   FfnSpec,
   KvQuantKey,
   ModelSpec,
   NativeDtype,
+  SpeculativeConfig,
   WeightQuantKey,
 } from './types';
 
@@ -37,10 +44,27 @@ const K = {
   gpuCount: 'gc',
   vramGB: 'vr',
   bandwidthGBs: 'bw',
+  tflopsBf16: 'tf',
   reservePct: 'rp',
   overheadGB: 'oh',
+  appleWiredLimitGB: 'awl',
+  usdPerHour: 'up',
+  offloadEnabled: 'oe',
+  systemRamGB: 'oram',
+  ramBandwidthGBs: 'obw',
   contextTokens: 'c',
   concurrentUsers: 'u',
+  fileWeightBytes: 'fwb',
+  fileWeightLabel: 'fwl',
+  fileWeightQuant: 'fwq',
+  runtime: 'rt',
+  specEnabled: 'se',
+  specDraftMode: 'sm',
+  specDraftId: 'sd',
+  specDraftParams: 'sp',
+  specDraftQuant: 'sq',
+  specK: 'sk',
+  specAlpha: 'sa',
 } as const;
 
 const ATTENTIONS: readonly Attention[] = ['mha_gqa', 'mla'];
@@ -71,6 +95,11 @@ export function encodeState(state: CalcState): string {
   set(K.nativeDtype, m.nativeDtype);
   if (m.moe) set(K.moe, `${m.moe.numExperts},${m.moe.expertsPerToken},${m.moe.sharedExperts}`);
   if (m.ffn) set(K.ffn, encodeFfn(m.ffn));
+  if (m.fileWeights) {
+    set(K.fileWeightBytes, m.fileWeights.bytes);
+    set(K.fileWeightLabel, m.fileWeights.label);
+    set(K.fileWeightQuant, m.fileWeights.quant);
+  }
   set(K.source, m.source);
   for (const w of m.warnings) q.append(K.warnings, w);
   set(K.weightQuant, state.quant.weight);
@@ -80,10 +109,40 @@ export function encodeState(state: CalcState): string {
   set(K.gpuCount, h.gpuCount);
   set(K.vramGB, h.vramGB);
   set(K.bandwidthGBs, h.bandwidthGBs);
+  set(K.tflopsBf16, h.tflopsBf16);
   set(K.reservePct, h.reservePct);
   set(K.overheadGB, h.overheadGB);
+  set(K.appleWiredLimitGB, h.appleWiredLimitGB);
+  if (h.usdPerHour !== undefined) {
+    set(K.usdPerHour, h.usdPerHour);
+  } else if (findGpuPreset(h.gpuName)?.usdPerHour !== undefined) {
+    // Explicit "cleared" sentinel: this preset has a price but the price was blanked out.
+    // Without it, an absent key is indistinguishable from an old link that predates the
+    // feature, and decode would fall the price back in on reload/share.
+    q.set(K.usdPerHour, '');
+  }
+  // Skip entirely when it's the untouched default (disabled, stock RAM figures) so a fresh
+  // load doesn't grow the URL with keys that mean nothing yet.
+  const isDefaultOffload =
+    !h.offload || (!h.offload.enabled && h.offload.systemRamGB === DEFAULT_OFFLOAD.systemRamGB && h.offload.ramBandwidthGBs === DEFAULT_OFFLOAD.ramBandwidthGBs);
+  if (h.offload && !isDefaultOffload) {
+    set(K.offloadEnabled, h.offload.enabled ? 1 : 0);
+    set(K.systemRamGB, h.offload.systemRamGB);
+    set(K.ramBandwidthGBs, h.offload.ramBandwidthGBs);
+  }
   set(K.contextTokens, state.workload.contextTokens);
   set(K.concurrentUsers, state.workload.concurrentUsers);
+  set(K.runtime, state.runtime ?? 'generic');
+  const sp = state.speculative;
+  if (sp) {
+    set(K.specEnabled, sp.enabled ? 1 : 0);
+    set(K.specDraftMode, sp.draftMode);
+    if (sp.draftMode === 'preset' && sp.draftModel) set(K.specDraftId, sp.draftModel.id);
+    if (sp.draftMode === 'custom' && sp.draftParams !== undefined) set(K.specDraftParams, sp.draftParams);
+    set(K.specDraftQuant, sp.draftWeightQuant);
+    set(K.specK, sp.k);
+    set(K.specAlpha, sp.alpha);
+  }
   return q.toString();
 }
 
@@ -177,26 +236,93 @@ export function decodeState(qs: string, fallback: CalcState): CalcState {
     }
     const ffnRaw = q.get(K.ffn);
     if (ffnRaw !== null) model.ffn = decodeFfn(ffnRaw);
+    // File bytes only mean something with the quant they are in: without `fwq` they are ignored.
+    if (q.has(K.fileWeightBytes) && q.has(K.fileWeightQuant)) {
+      const bytes = num(K.fileWeightBytes);
+      if (!(bytes > 0)) throw new BadState();
+      const quant = oneOf(q.get(K.fileWeightQuant), Object.keys(WEIGHT_QUANTS) as WeightQuantKey[]);
+      model.fileWeights = { bytes, label: q.get(K.fileWeightLabel) ?? '', quant };
+    }
 
-    return {
+    const result: CalcState = {
       model,
       quant: {
         weight: oneOf(q.get(K.weightQuant), Object.keys(WEIGHT_QUANTS) as WeightQuantKey[]),
         kv: oneOf(q.get(K.kvQuant), Object.keys(KV_QUANTS) as KvQuantKey[]),
       },
-      hardware: {
-        gpuName: str(K.gpuName),
-        gpuCount: num(K.gpuCount),
-        vramGB: num(K.vramGB),
-        bandwidthGBs: num(K.bandwidthGBs),
-        reservePct: num(K.reservePct),
-        overheadGB: num(K.overheadGB),
-      },
+      hardware: (() => {
+        const hw = {
+          gpuName: str(K.gpuName),
+          gpuCount: num(K.gpuCount),
+          vramGB: num(K.vramGB),
+          bandwidthGBs: num(K.bandwidthGBs),
+          // New key (issue #11): links shared before the prefill estimate existed have no
+          // "tf" param. Falling back to the named GPU's own preset (when it is one) keeps an
+          // old H100 link's TTFT in the right ballpark instead of reading off a generic default.
+          tflopsBf16: optNum(K.tflopsBf16) ?? findGpuPreset(str(K.gpuName))?.tflopsBf16 ?? 100,
+          reservePct: num(K.reservePct),
+          overheadGB: num(K.overheadGB),
+        };
+        const appleWiredLimit = optNum(K.appleWiredLimitGB);
+        if (appleWiredLimit !== undefined) (hw as any).appleWiredLimitGB = appleWiredLimit;
+        // New key (issue #16): a link shared before the cost card existed has no "up" param at
+        // all — falling back to the named GPU's own preset price (when it has one) keeps an old
+        // H100 link's cost card populated instead of hiding it for no reason. But a *present*,
+        // empty "up=" is a deliberate sentinel: the preset has a price and it was blanked out in
+        // the Hardware panel, which must stay blank on reload/share rather than fall back too.
+        const usdPerHourRaw = q.get(K.usdPerHour);
+        const usdPerHour =
+          usdPerHourRaw === null
+            ? findGpuPreset(str(K.gpuName))?.usdPerHour
+            : usdPerHourRaw.trim() === ''
+              ? undefined
+              : num(K.usdPerHour);
+        if (usdPerHour !== undefined) (hw as any).usdPerHour = usdPerHour;
+        // Old shared links never had these keys; resolveOffload's disabled default fills the gap.
+        if (q.has(K.offloadEnabled) || q.has(K.systemRamGB) || q.has(K.ramBandwidthGBs)) {
+          const offloadDefault = resolveOffload(undefined);
+          (hw as any).offload = {
+            enabled: q.get(K.offloadEnabled) === '1',
+            systemRamGB: optNum(K.systemRamGB) ?? offloadDefault.systemRamGB,
+            ramBandwidthGBs: optNum(K.ramBandwidthGBs) ?? offloadDefault.ramBandwidthGBs,
+          };
+        }
+        return hw;
+      })(),
       workload: {
         contextTokens: num(K.contextTokens),
         concurrentUsers: num(K.concurrentUsers),
       },
+      // Missing key (a link shared before this profile existed) decodes as 'generic' — identical
+      // numbers to today. An unrecognized value invalidates the whole state, like every other field.
+      runtime: q.has(K.runtime) ? oneOf(q.get(K.runtime), RUNTIME_KEYS) : 'generic',
     };
+
+    // Speculative decoding: entirely optional, so an old link without these keys decodes
+    // unchanged (result.speculative stays absent, same as before this feature existed).
+    const specEnabledRaw = q.get(K.specEnabled);
+    if (specEnabledRaw !== null) {
+      const draftModeRaw = q.get(K.specDraftMode);
+      const draftId = q.get(K.specDraftId);
+      const draftModel = draftModeRaw === 'preset' && draftId !== null ? findModelPreset(draftId) : undefined;
+      const draftMode: DraftMode = draftModel ? 'preset' : draftModeRaw === 'custom' ? 'custom' : 'none';
+      const quantRaw = q.get(K.specDraftQuant);
+      const draftWeightQuant: WeightQuantKey =
+        quantRaw !== null && quantRaw in WEIGHT_QUANTS ? (quantRaw as WeightQuantKey) : 'q4_k_m';
+      const speculative: SpeculativeConfig = {
+        enabled: specEnabledRaw === '1',
+        draftMode,
+        draftWeightQuant,
+        k: optNum(K.specK) ?? DEFAULT_DRAFT_K,
+        alpha: optNum(K.specAlpha) ?? DEFAULT_DRAFT_ALPHA,
+      };
+      if (draftModel) speculative.draftModel = draftModel;
+      const draftParams = optNum(K.specDraftParams);
+      if (draftMode === 'custom' && draftParams !== undefined) speculative.draftParams = draftParams;
+      result.speculative = speculative;
+    }
+
+    return result;
   } catch {
     return fallback;
   }
