@@ -1,3 +1,4 @@
+import { findGpuPreset } from './presets/gpus';
 import { KV_QUANTS, WEIGHT_QUANTS } from './quant';
 import type {
   Attention,
@@ -192,9 +193,9 @@ export function decodeState(qs: string, fallback: CalcState): CalcState {
         vramGB: num(K.vramGB),
         bandwidthGBs: num(K.bandwidthGBs),
         // New key (issue #11): links shared before the prefill estimate existed have no
-        // "tf" param, so a missing value falls back to a plausible default rather than
-        // invalidating the whole link.
-        tflopsBf16: optNum(K.tflopsBf16) ?? 100,
+        // "tf" param. Falling back to the named GPU's own preset (when it is one) keeps an
+        // old H100 link's TTFT in the right ballpark instead of reading off a generic default.
+        tflopsBf16: optNum(K.tflopsBf16) ?? findGpuPreset(str(K.gpuName))?.tflopsBf16 ?? 100,
         reservePct: num(K.reservePct),
         overheadGB: num(K.overheadGB),
       },

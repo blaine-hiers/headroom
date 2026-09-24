@@ -89,7 +89,7 @@ describe('calculate', () => {
   });
 
   it('does not fit when weights exceed VRAM: maxUsers 0, headroom negative', () => {
-    const rtx4090: HardwareSpec = { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, tflopsBf16: 82.6, reservePct: 5, overheadGB: 1 };
+    const rtx4090: HardwareSpec = { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, tflopsBf16: 165.0, reservePct: 5, overheadGB: 1 };
     const r = calculate(state({ hardware: rtx4090, workload: { contextTokens: 2048, concurrentUsers: 1 } }));
     expect(r.fits).toBe(false);
     expect(r.headroomBytes).toBeLessThan(0);
@@ -114,7 +114,7 @@ describe('calculate', () => {
   });
 
   it('caps maxContext at maxPositionEmbeddings when memory is plentiful', () => {
-    const b200x8: HardwareSpec = { gpuName: 'B200', gpuCount: 8, vramGB: 192, bandwidthGBs: 8000, tflopsBf16: 1125, reservePct: 5, overheadGB: 1 };
+    const b200x8: HardwareSpec = { gpuName: 'B200', gpuCount: 8, vramGB: 192, bandwidthGBs: 8000, tflopsBf16: 2250, reservePct: 5, overheadGB: 1 };
     const model = makeSpec({ params: 8e9, maxPositionEmbeddings: 8192 });
     expect(calculate(state({ model, hardware: b200x8 })).maxContextForUsers).toBe(8192);
   });

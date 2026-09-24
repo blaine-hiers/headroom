@@ -33,9 +33,9 @@ describe('GPU presets', () => {
   it('every preset has a sane dense BF16 TFLOPS figure', () => {
     for (const g of GPU_PRESETS) {
       expect(Number.isFinite(g.tflopsBf16), g.name).toBe(true);
-      // Bracket: a Turing consumer card at the low end, a Blackwell datacenter part at the high end.
-      expect(g.tflopsBf16, g.name).toBeGreaterThan(5);
-      expect(g.tflopsBf16, g.name).toBeLessThan(5000);
+      // Bracket: below the slowest listed card (RTX 2070, 14.9) and above the fastest (B200, 2250).
+      expect(g.tflopsBf16, g.name).toBeGreaterThan(10);
+      expect(g.tflopsBf16, g.name).toBeLessThan(3000);
     }
   });
 });

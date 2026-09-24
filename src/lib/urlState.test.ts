@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeSpec } from './__fixtures__/makeSpec';
+import { findGpuPreset } from './presets/gpus';
 import { MODEL_PRESETS } from './presets/models';
 import type { CalcState } from './types';
 import { decodeState, encodeState } from './urlState';
@@ -8,7 +9,7 @@ import { activeParamsDetailed } from './weights';
 const fallback: CalcState = {
   model: makeSpec(),
   quant: { weight: 'bf16', kv: 'fp16' },
-  hardware: { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, tflopsBf16: 82.6, reservePct: 5, overheadGB: 1 },
+  hardware: { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, tflopsBf16: 165.0, reservePct: 5, overheadGB: 1 },
   workload: { contextTokens: 8192, concurrentUsers: 1 },
 };
 
@@ -56,13 +57,23 @@ describe('urlState', () => {
     expect(qs.length).toBeLessThan(400);
   });
 
-  it('an old link without tflopsBf16 (issue #11) still decodes, defaulting the new field', () => {
+  it('an old link without tflopsBf16 (issue #11) still decodes, from the named GPU preset', () => {
+    // fallback's gpuName is a known preset (RTX 4090), so the missing "tf" param should read
+    // the preset's own TFLOPS rather than a generic default — an old H100 link should not show
+    // an RTX-4090-speed TTFT.
     const qs = encodeState(fallback).replace(/&?tf=[^&]*/, '');
     expect(qs).not.toContain('tf=');
     const decoded = decodeState(qs, fallback);
     expect(decoded).not.toBe(fallback);
+    expect(decoded.hardware.tflopsBf16).toBe(findGpuPreset('RTX 4090')?.tflopsBf16);
+    expect(decoded).toEqual(fallback);
+  });
+
+  it('an old link for an unknown/custom GPU name falls back to the generic default', () => {
+    const s: CalcState = { ...fallback, hardware: { ...fallback.hardware, gpuName: 'Some Future GPU' } };
+    const qs = encodeState(s).replace(/&?tf=[^&]*/, '');
+    const decoded = decodeState(qs, fallback);
     expect(decoded.hardware.tflopsBf16).toBe(100);
-    expect(decoded).toEqual({ ...fallback, hardware: { ...fallback.hardware, tflopsBf16: 100 } });
   });
 
   it('bad input → fallback', () => {
