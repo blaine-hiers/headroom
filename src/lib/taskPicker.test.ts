@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeSpec } from './__fixtures__/makeSpec';
+import { MAX_GPUS } from './limits';
 import { DEFAULT_TASK_PICKER_CONSTRAINTS, rankModelsForTask } from './taskPicker';
 import type { TaskPickerConstraints } from './taskPicker';
 import type { CatalogEntry, CatalogMeta } from './presets/catalog';
@@ -110,11 +111,34 @@ describe('rankModelsForTask', () => {
     expect(rows[0].hardware.gpuName).not.toBe('Custom');
   });
 
-  it('builds a one-line reason mentioning headroom, tok/s, license and context', () => {
+  it('builds a one-line reason mentioning headroom, tok/s, license, context and hardware', () => {
     const catalog = [entry({ id: 'a', name: 'A', params: 8e9, activeParams: 8e9, maxPositionEmbeddings: 131072 }, { license: 'apache-2.0' })];
-    const { rows } = rankModelsForTask(catalog, constraints());
+    const { rows } = rankModelsForTask(catalog, constraints({ gpuName: 'RTX 4090', gpuCount: 1 }));
     expect(rows[0].reason).toMatch(/tok\/s/);
     expect(rows[0].reason).toMatch(/Apache-2\.0/);
     expect(rows[0].reason).toMatch(/128K ctx/);
+    expect(rows[0].reason).toMatch(/1× RTX 4090/);
+  });
+
+  it('names the GPU (and count) an "any" hardware row actually landed on', () => {
+    const catalog = [entry({ id: 'a', name: 'A', params: 1e9, activeParams: 1e9 }, {})];
+    const { rows } = rankModelsForTask(catalog, constraints({ gpuName: 'any', gpuCount: 2 }));
+    expect(rows[0].reason).toContain(`2× ${rows[0].hardware.gpuName}`);
+    expect(rows[0].hardware.gpuName).not.toBe('any');
+  });
+
+  it('clamps a huge gpuCount instead of letting it inflate headroom', () => {
+    const catalog = [entry({ id: 'a', name: 'A', params: 1e9, activeParams: 1e9 }, {})];
+    const { rows } = rankModelsForTask(catalog, constraints({ gpuName: 'RTX 4090', gpuCount: 999_999_999 }));
+    expect(rows[0].hardware.gpuCount).toBe(MAX_GPUS);
+  });
+
+  it("caps a row's workload/context at that model's own maxPositionEmbeddings, matching what Use would load", () => {
+    const catalog = [entry({ id: 'a', name: 'A', params: 1e9, activeParams: 1e9, maxPositionEmbeddings: 8192 }, {})];
+    // Requested context sits at the model's own cap (the task filter already excludes anything
+    // smaller), so the row's workload should come out exactly at that cap, not something larger.
+    const { rows } = rankModelsForTask(catalog, constraints({ contextTokens: 8192 }));
+    expect(rows[0].workload.contextTokens).toBe(8192);
+    expect(rows[0].workload.contextTokens).toBeLessThanOrEqual(catalog[0].spec.maxPositionEmbeddings);
   });
 });

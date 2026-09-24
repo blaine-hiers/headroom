@@ -4,7 +4,9 @@
 // `undefined` — no TaskPicker state — leaving every existing shared link, including `c2`/`c3`
 // compare links, unchanged.
 
+import { MAX_CATALOG_CONTEXT, MAX_GPUS, MAX_USERS, MIN_CONTEXT } from './limits';
 import { TASK_TAGS } from './presets/catalog';
+import { findGpuPreset } from './presets/gpus';
 import { KV_QUANTS, WEIGHT_QUANTS } from './quant';
 import { DEFAULT_TASK_PICKER_CONSTRAINTS } from './taskPicker';
 import type { TaskPickerConstraints } from './taskPicker';
@@ -55,23 +57,30 @@ export function decodeTaskPickerState(search: string): TaskPickerConstraints | u
   const task = q.get(PT.task);
   if (task === null || !(TASK_TAGS as readonly string[]).includes(task)) return undefined;
 
-  const num = (key: string, fallback: number): number => {
+  // Clamped the same way the Calculator's own inputs are (MAX_GPUS, MAX_USERS, MIN_CONTEXT):
+  // a crafted `pt_gc`/`pt_ctx`/`pt_users` (huge, negative, or non-finite) must never reach
+  // `rankModelsForTask`'s `calculate()` calls unclamped.
+  const numClamped = (key: string, fallback: number, lo: number, hi: number): number => {
     const raw = q.get(key);
     if (raw === null) return fallback;
     const n = Number(raw);
-    return Number.isFinite(n) ? n : fallback;
+    if (!Number.isFinite(n)) return fallback;
+    return Math.round(Math.min(hi, Math.max(lo, n)));
   };
   const oneOf = <T extends string>(key: string, allowed: readonly T[], fallback: T): T => {
     const raw = q.get(key);
     return raw !== null && (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback;
   };
 
+  const gpuRaw = q.get(PT.gpu);
+  const gpuName = gpuRaw !== null && (gpuRaw === 'any' || findGpuPreset(gpuRaw)) ? gpuRaw : DEFAULT_TASK_PICKER_CONSTRAINTS.gpuName;
+
   return {
     task: task as TaskPickerConstraints['task'],
-    gpuName: q.get(PT.gpu) ?? DEFAULT_TASK_PICKER_CONSTRAINTS.gpuName,
-    gpuCount: num(PT.gpuCount, DEFAULT_TASK_PICKER_CONSTRAINTS.gpuCount),
-    contextTokens: num(PT.context, DEFAULT_TASK_PICKER_CONSTRAINTS.contextTokens),
-    concurrentUsers: num(PT.users, DEFAULT_TASK_PICKER_CONSTRAINTS.concurrentUsers),
+    gpuName,
+    gpuCount: numClamped(PT.gpuCount, DEFAULT_TASK_PICKER_CONSTRAINTS.gpuCount, 1, MAX_GPUS),
+    contextTokens: numClamped(PT.context, DEFAULT_TASK_PICKER_CONSTRAINTS.contextTokens, MIN_CONTEXT, MAX_CATALOG_CONTEXT),
+    concurrentUsers: numClamped(PT.users, DEFAULT_TASK_PICKER_CONSTRAINTS.concurrentUsers, 1, MAX_USERS),
     weightQuant: oneOf(PT.weightQuant, Object.keys(WEIGHT_QUANTS) as WeightQuantKey[], DEFAULT_TASK_PICKER_CONSTRAINTS.weightQuant),
     kvQuant: oneOf(PT.kvQuant, Object.keys(KV_QUANTS) as KvQuantKey[], DEFAULT_TASK_PICKER_CONSTRAINTS.kvQuant),
     licenseFilter: oneOf(PT.license, ['any', 'permissive'] as const, DEFAULT_TASK_PICKER_CONSTRAINTS.licenseFilter),

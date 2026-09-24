@@ -231,7 +231,7 @@ export function TaskPicker({ planner, dispatch, openInCalculator }: Props) {
                               model: row.entry.spec,
                               quant: { weight: constraints.weightQuant, kv: constraints.kvQuant },
                               hardware: row.hardware,
-                              workload: { contextTokens: constraints.contextTokens, concurrentUsers: constraints.concurrentUsers },
+                              workload: row.workload,
                               runtime: 'generic',
                             })
                           }
