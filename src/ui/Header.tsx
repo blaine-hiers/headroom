@@ -4,11 +4,13 @@ import { ThemeToggle } from './ThemeToggle';
 interface Props {
   /** Writes the state into the URL and returns the full shareable link. */
   getLink: () => string;
+  compareOn: boolean;
+  onToggleCompare: () => void;
 }
 
 export const GITHUB_URL = 'https://github.com/blaine-hiers/headroom';
 
-export function Header({ getLink }: Props) {
+export function Header({ getLink, compareOn, onToggleCompare }: Props) {
   const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle');
   const timer = useRef<number | undefined>(undefined);
 
@@ -43,6 +45,9 @@ export function Header({ getLink }: Props) {
         </div>
       </div>
       <nav className="header-actions" aria-label="Page actions">
+        <button type="button" className="btn btn-ghost" aria-pressed={compareOn} onClick={onToggleCompare}>
+          {compareOn ? 'Compare: on' : 'Compare'}
+        </button>
         <button type="button" className="btn btn-ghost" onClick={() => void copy()}>
           <span aria-live="polite">{copied === 'copied' ? 'Copied' : copied === 'failed' ? 'Link is in the address bar' : 'Copy link'}</span>
         </button>
