@@ -8,6 +8,7 @@ export * from './throughput';
 export * from './tensorParallel';
 export * from './format';
 export * from './hf';
+export * from './hfSearch';
 export * from './urlState';
 export * from './gguf';
 export * from './fileWeights';

@@ -327,6 +327,59 @@ select optgroup {
   flex: 1;
 }
 
+/* repo id combobox */
+
+.combobox-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.combobox-list {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.combobox-option {
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.combobox-option.is-active,
+.combobox-option:hover {
+  background: var(--chosen-bg);
+}
+
+.combobox-id {
+  font-family: var(--mono);
+}
+
+.combobox-gated {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
 .grid2,
 .grid3 {
   display: grid;
