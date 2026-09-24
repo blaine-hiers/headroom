@@ -145,6 +145,8 @@ export default function App() {
     // Save current state for undo
     setUndoState({ state, extraColumns, compareOn, selected });
     setUndoTab('calculator');
+    // Drop the planner's undo snapshot when clearing calculator
+    setUndoPlannerState(null);
     setShowUndo(true);
 
     // Clear the timer if one is already running
@@ -159,33 +161,25 @@ export default function App() {
     // Set a timer to hide the undo button after 8 seconds
     undoTimerRef.current = window.setTimeout(() => {
       setShowUndo(false);
+      setUndoTab(null);
       undoTimerRef.current = null;
     }, 8000);
   }, [state, extraColumns, compareOn, selected]);
 
   const undoCalculatorClear = useCallback(() => {
     if (!undoState) return;
-    // Restore the saved state
-    const savedState = undoState;
-
-    // Restore calculator state by dispatching reset then manually setting since we need exact state
-    // The easiest way is to dispatch a loadPartial that restores all the fields
+    // Restore the saved state using the restore action, which returns the state exactly
     dispatch({
-      type: 'loadPartial',
-      patch: {
-        model: savedState.state.model,
-        quant: savedState.state.quant,
-        hardware: savedState.state.hardware,
-        workload: savedState.state.workload,
-        runtime: savedState.state.runtime,
-      },
+      type: 'restore',
+      state: undoState.state,
     });
 
-    setExtraColumns(savedState.extraColumns);
-    setCompareOn(savedState.compareOn);
-    setSelected(savedState.selected);
+    setExtraColumns(undoState.extraColumns);
+    setCompareOn(undoState.compareOn);
+    setSelected(undoState.selected);
     setShowUndo(false);
     setUndoState(null);
+    setUndoTab(null);
 
     // Clear the timer if it's still running
     if (undoTimerRef.current) {
@@ -198,6 +192,8 @@ export default function App() {
     // Save current planner state for undo
     setUndoPlannerState(planner);
     setUndoTab('planner');
+    // Drop the calculator's undo snapshot when clearing planner
+    setUndoState(null);
     plannerDispatch({ type: 'clear' });
     setShowUndo(true);
 
@@ -205,20 +201,21 @@ export default function App() {
     if (undoTimerRef.current) window.clearTimeout(undoTimerRef.current);
     undoTimerRef.current = window.setTimeout(() => {
       setShowUndo(false);
+      setUndoTab(null);
       undoTimerRef.current = null;
     }, 8000);
   }, [planner]);
 
   const undoPlannerClear = useCallback(() => {
     if (!undoPlannerState) return;
-    // The planner state should be fully restored by dispatching a setHandoffModelId
-    // Since the planner just has the handoffModelId field as the main state, we restore it
+    // Restore the saved planner state using the restore action, which returns the state exactly
     plannerDispatch({
-      type: 'setHandoffModelId',
-      modelId: undoPlannerState.handoffModelId,
+      type: 'restore',
+      state: undoPlannerState,
     });
     setShowUndo(false);
     setUndoPlannerState(null);
+    setUndoTab(null);
 
     // Clear the timer if it's still running
     if (undoTimerRef.current) {
@@ -232,8 +229,8 @@ export default function App() {
       <Header getLink={getLink} compareOn={compareOn} onToggleCompare={toggleCompare} />
       <TabBar active={tab} onChange={setTab} />
       <div id="tabpanel-calculator" role="tabpanel" aria-labelledby="tab-calculator" hidden={tab !== 'calculator'}>
-        {showUndo && undoState && (
-          <div className="undo-notice">
+        {showUndo && undoTab === 'calculator' && undoState && (
+          <div className="undo-notice" role="status">
             <span className="muted">Cleared · </span>
             <button className="link-btn" onClick={undoCalculatorClear}>
               Undo

@@ -24,7 +24,7 @@ export function Planner({ planner, dispatch, openInCalculator, onClear, showUndo
   return (
     <div className="planner">
       {showUndo && onUndo && (
-        <div className="undo-notice">
+        <div className="undo-notice" role="status">
           <span className="muted">Cleared · </span>
           <button className="link-btn" onClick={onUndo}>
             Undo

@@ -69,7 +69,8 @@ export type Action =
   | { type: 'runtime'; runtime: RuntimeKey }
   | { type: 'speculative'; patch: Partial<SpeculativeConfig> }
   | { type: 'loadPartial'; patch: OpenInCalculatorPatch }
-  | { type: 'reset' };
+  | { type: 'reset' }
+  | { type: 'restore'; state: CalcState };
 
 function clampWorkload(w: Workload, model: ModelSpec): Workload {
   return {
@@ -146,6 +147,8 @@ export function reducer(state: CalcState, action: Action): CalcState {
     }
     case 'reset':
       return defaultState;
+    case 'restore':
+      return action.state;
   }
 }
 

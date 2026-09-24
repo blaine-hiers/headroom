@@ -247,3 +247,26 @@ describe('reducer: reset (#26 Clear button)', () => {
     expect(cleared).toEqual(defaultState);
   });
 });
+
+describe('reducer: restore (#26 Undo)', () => {
+  it('restores the exact saved state including speculative config', () => {
+    // Enable speculative decoding
+    let s = reducer(defaultState, { type: 'speculative', patch: { k: 5, alpha: 0.7, draftModel: preset('Llama 3.1 8B') } });
+    s = reducer(s, { type: 'hardware', patch: { gpuCount: 2 } });
+
+    // Save the state with speculative
+    const savedState = s;
+
+    // Make more changes
+    let modified = reducer(s, { type: 'speculative', patch: { k: 3 } });
+    modified = reducer(modified, { type: 'hardware', patch: { gpuCount: 4 } });
+
+    // Restore the exact saved state
+    const restored = reducer(modified, { type: 'restore', state: savedState });
+
+    // Should match exactly, including speculative
+    expect(restored).toEqual(savedState);
+    expect(restored.speculative).toEqual(savedState.speculative);
+    expect(restored.hardware.gpuCount).toBe(2);
+  });
+});
