@@ -8,6 +8,7 @@ export * from './prefill';
 export * from './throughput';
 export * from './offload';
 export * from './tensorParallel';
+export * from './speculative';
 export * from './format';
 export * from './hf';
 export * from './hfSearch';

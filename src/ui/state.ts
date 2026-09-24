@@ -4,12 +4,13 @@ import {
   decodeState,
   DEFAULT_OFFLOAD,
   defaultWeightQuantFor,
+  DISABLED_SPECULATIVE,
   findGpuPreset,
   findModelPreset,
   MODEL_PRESETS,
   refreshWarnings,
 } from '../lib';
-import type { CalcState, HardwareSpec, ModelSpec, Quant, RuntimeKey, Workload } from '../lib';
+import type { CalcState, HardwareSpec, ModelSpec, Quant, RuntimeKey, SpeculativeConfig, Workload } from '../lib';
 
 export const MIN_CONTEXT = 256;
 export const MAX_USERS = 512;
@@ -19,6 +20,7 @@ export const MAX_DIM = 1e7;
 export const MAX_PARAMS = 1e14;
 /** Upper bound for exact weight-file bytes from a (shared) link. */
 export const MAX_FILE_BYTES = 1e15;
+export const MAX_DRAFT_K = 16;
 
 const DEFAULT_MODEL = findModelPreset('meta-llama/Llama-3.3-70B-Instruct') ?? MODEL_PRESETS[0];
 const DEFAULT_GPU = findGpuPreset('RTX 4090');
@@ -38,6 +40,7 @@ export const defaultState: CalcState = {
   },
   workload: { contextTokens: 8192, concurrentUsers: 1 },
   runtime: 'generic',
+  speculative: DISABLED_SPECULATIVE,
 };
 
 export function clamp(v: number, lo: number, hi: number): number {
@@ -56,7 +59,8 @@ export type Action =
   | { type: 'quant'; patch: Partial<Quant> }
   | { type: 'hardware'; patch: Partial<HardwareSpec> }
   | { type: 'workload'; patch: Partial<Workload> }
-  | { type: 'runtime'; runtime: RuntimeKey };
+  | { type: 'runtime'; runtime: RuntimeKey }
+  | { type: 'speculative'; patch: Partial<SpeculativeConfig> };
 
 function clampWorkload(w: Workload, model: ModelSpec): Workload {
   return {
@@ -111,6 +115,14 @@ export function reducer(state: CalcState, action: Action): CalcState {
       return { ...state, workload: clampWorkload({ ...state.workload, ...action.patch }, state.model) };
     case 'runtime':
       return { ...state, runtime: action.runtime };
+    case 'speculative': {
+      const merged = { ...(state.speculative ?? DISABLED_SPECULATIVE), ...action.patch };
+      // Explicitly clearing draftModel/draftParams (e.g. switching modes) drops the key rather
+      // than keeping an undefined, matching editModel's handling of `moe: undefined`.
+      if ('draftModel' in action.patch && action.patch.draftModel === undefined) delete merged.draftModel;
+      if ('draftParams' in action.patch && action.patch.draftParams === undefined) delete merged.draftParams;
+      return { ...state, speculative: merged };
+    }
   }
 }
 
@@ -194,6 +206,9 @@ export function initialState(search: string): CalcState {
     model,
     hardware,
     workload: clampWorkload(s.workload, model),
+    speculative: s.speculative
+      ? { ...s.speculative, k: Math.round(clamp(s.speculative.k, 0, MAX_DRAFT_K)), alpha: clamp(s.speculative.alpha, 0, 1) }
+      : undefined,
   };
 }
 

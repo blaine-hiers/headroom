@@ -90,7 +90,9 @@ export function ShowTheMath({ state, result }: Props) {
   const C = Math.floor(workload.contextTokens);
   const N = Math.floor(workload.concurrentUsers);
   const kvCtx = kvContextForRuntime(C, runtime);
-  const fixed = result.weightBytes + result.overheadBytes;
+  // Everything that doesn't scale with users, as fit.ts computes it: includes the draft
+  // model's weights when speculation is on, and only GPU-resident weights when offload is on.
+  const fixed = result.fixedBytes;
   const active = result.activeParams;
   const method = result.activeParamsMethod;
   const activeBytes = result.activeWeightBytes;
@@ -212,6 +214,23 @@ export function ShowTheMath({ state, result }: Props) {
           sub={usableSub}
           result={B(result.usableBytes)}
         />
+        {result.speculative.enabled ? (
+          <Step
+            title="Total VRAM"
+            formula="weights + draftWeights + overheadGB × 1e9 × gpuCount + N × (KV per request + draft KV per request)"
+            sub={
+              <>
+                {n(result.weightBytes)} + {n(result.speculative.memory.weightBytes)} + {n(hw.overheadGB, 2)} × 1e9 × {n(hw.gpuCount)} + {n(N)} × (
+                {n(result.kvBytesPerRequest)} + {n(result.speculative.memory.kvBytesPerRequest)})
+              </>
+            }
+            result={
+              <>
+                {B(result.totalBytes)} ({result.fits ? 'fits' : 'does not fit'} in {formatNumber(result.usableBytes)} B)
+              </>
+            }
+          />
+        ) : (
         <Step
           title="Total VRAM"
           formula={
@@ -237,23 +256,32 @@ export function ShowTheMath({ state, result }: Props) {
             </>
           }
         />
+        )}
         <Step
           title="Max users at C"
-          formula="floor((usable − fixed) / KV per request)"
-          sub={`floor((${n(result.usableBytes)} − ${n(fixed)}) / ${n(result.kvBytesPerRequest)})`}
+          formula={result.speculative.enabled ? 'floor((usable − fixed) / (KV per request + draft KV per request))' : 'floor((usable − fixed) / KV per request)'}
+          sub={
+            result.speculative.enabled
+              ? `floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(result.kvBytesPerRequest)} + ${n(result.speculative.memory.kvBytesPerRequest)}))`
+              : `floor((${n(result.usableBytes)} − ${n(fixed)}) / ${n(result.kvBytesPerRequest)})`
+          }
           result={Number.isFinite(maxU) ? n(maxU) : '∞'}
         />
         <Step
           title="Max context for N users"
           formula={
-            runtime === 'vllm'
-              ? `min(maxPosition, ${VLLM_KV_BLOCK_TOKENS} × floor((usable − fixed) / (N × KV per token) / ${VLLM_KV_BLOCK_TOKENS}))`
-              : 'min(maxPosition, floor((usable − fixed) / (N × KV per token)))'
+            result.speculative.enabled
+              ? 'min(maxPosition, floor((usable − fixed) / (N × (KV per token + draft KV per token))))'
+              : runtime === 'vllm'
+                ? `min(maxPosition, ${VLLM_KV_BLOCK_TOKENS} × floor((usable − fixed) / (N × KV per token) / ${VLLM_KV_BLOCK_TOKENS}))`
+                : 'min(maxPosition, floor((usable − fixed) / (N × KV per token)))'
           }
           sub={
-            runtime === 'vllm'
-              ? `min(${n(model.maxPositionEmbeddings)}, ${VLLM_KV_BLOCK_TOKENS} × floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)}) / ${VLLM_KV_BLOCK_TOKENS}))`
-              : `min(${n(model.maxPositionEmbeddings)}, floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)})))`
+            result.speculative.enabled
+              ? `min(${n(model.maxPositionEmbeddings)}, floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × (${n(result.kvBytesPerToken)} + ${n(result.speculative.memory.kvBytesPerToken)}))))`
+              : runtime === 'vllm'
+                ? `min(${n(model.maxPositionEmbeddings)}, ${VLLM_KV_BLOCK_TOKENS} × floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)}) / ${VLLM_KV_BLOCK_TOKENS}))`
+                : `min(${n(model.maxPositionEmbeddings)}, floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)})))`
           }
           result={`${n(result.maxContextForUsers)} tokens${runtime === 'vllm' ? ' (rounded down to a block multiple, so it always fits)' : ''}`}
         />
@@ -350,6 +378,36 @@ export function ShowTheMath({ state, result }: Props) {
                 </>
               }
               result={`${n(result.throughput.perUserTokS, 1)} tok/s per user, ${n(result.throughput.aggregateTokS, 1)} tok/s aggregate`}
+            />
+          </>
+        )}
+        {result.speculative.enabled && state.speculative && (
+          <>
+            {result.speculative.memory.totalBytes > 0 && (
+              <Step
+                title="Draft model memory"
+                formula="draftWeightBytes + N × draftKvBytesPerRequest"
+                sub={`${n(result.speculative.memory.weightBytes)} + ${n(N)} × ${n(result.speculative.memory.kvBytesPerRequest)}`}
+                result={B(result.speculative.memory.totalBytes)}
+              />
+            )}
+            <Step
+              title="Expected tokens per verify step"
+              formula="(1 − α^(k+1)) / (1 − α), limit k+1 at α = 1"
+              sub={`α = ${n(state.speculative.alpha, 2)}, k = ${n(state.speculative.k)}`}
+              result={n(result.speculative.throughput.expectedTokensPerStep, 3)}
+            />
+            <Step
+              title="Verify step time"
+              formula="targetStepSeconds + k × draftStepSeconds"
+              sub={`${n(result.speculative.throughput.targetStepSeconds * 1000, 3)} ms + ${n(state.speculative.k)} × ${n(result.speculative.throughput.draftStepSeconds * 1000, 3)} ms`}
+              result={`${n(result.speculative.throughput.verifyStepSeconds * 1000, 3)} ms`}
+            />
+            <Step
+              title="Speculative decode throughput"
+              formula="expectedTokensPerStep / verifyStepSeconds"
+              sub={`${n(result.speculative.throughput.expectedTokensPerStep, 3)} / ${n(result.speculative.throughput.verifyStepSeconds, 6)} s`}
+              result={`${n(result.speculative.throughput.perUserTokS, 1)} tok/s per user (×${n(result.speculative.throughput.multiplier, 2)} vs no speculation)`}
             />
           </>
         )}

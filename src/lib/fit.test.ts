@@ -489,3 +489,97 @@ describe('CPU/RAM offload (#7)', () => {
     expect(r.throughput.aggregateTokS).toBe(0);
   });
 });
+
+describe('speculative decoding', () => {
+  it('with speculation off, every number is bit-identical to a state with no speculative field at all', () => {
+    const withoutField = calculate(state());
+    const withDisabled = calculate(state({ speculative: { enabled: false, draftMode: 'none', draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 } }));
+    expect(withDisabled).toEqual(withoutField);
+    expect(withoutField.speculative).toEqual({
+      enabled: false,
+      memory: { weightBytes: 0, activeWeightBytes: 0, kvBytesPerRequest: 0, kvBytesAllUsers: 0, kvBytesPerToken: 0, totalBytes: 0 },
+      throughput: {
+        expectedTokensPerStep: 1,
+        targetStepSeconds: 1 / withoutField.throughput.perUserTokS,
+        draftStepSeconds: 0,
+        verifyStepSeconds: 1 / withoutField.throughput.perUserTokS,
+        perUserTokS: withoutField.throughput.perUserTokS,
+        aggregateTokS: withoutField.throughput.aggregateTokS,
+        multiplier: 1,
+      },
+    });
+  });
+
+  it('a preset draft model adds its weights and KV cache to totalBytes and fits', () => {
+    const draft = findModelPreset('meta-llama/Llama-3.1-8B-Instruct');
+    if (!draft) throw new Error('missing preset');
+    const off = calculate(state());
+    const on = calculate(
+      state({ speculative: { enabled: true, draftMode: 'preset', draftModel: draft, draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 } }),
+    );
+    expect(on.totalBytes).toBeGreaterThan(off.totalBytes);
+    expect(on.speculative.memory.totalBytes).toBeCloseTo(on.totalBytes - off.totalBytes, 0);
+    expect(on.usableBytes).toBe(off.usableBytes);
+  });
+
+  it("draftMode 'none' (n-gram) costs no memory even when enabled", () => {
+    const on = calculate(state({ speculative: { enabled: true, draftMode: 'none', draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 } }));
+    const off = calculate(state());
+    expect(on.totalBytes).toBe(off.totalBytes);
+    expect(on.speculative.throughput.multiplier).toBeGreaterThan(1); // still speeds up decode
+  });
+
+  // Regression: maxUsersAtContext, the context table, and maxContextForUsers each used to be
+  // computed from the target-only KV rate while `fixed`/`total` already included the draft's
+  // cost — so fits could say "does not fit" for a user count that maxUsersAtContext still
+  // claimed fit. 70B Q4 target + 8B FP16 draft, k=4, α=0.7, 2×H100 SXM, 32K context, 9 users
+  // used to give fits=false but maxUsersAtContext=9 (the true max was lower).
+  it('maxUsersAtContext is self-consistent with fits when a draft model is enabled', () => {
+    const target = findModelPreset('meta-llama/Llama-3.3-70B-Instruct');
+    const draft = findModelPreset('meta-llama/Llama-3.1-8B-Instruct');
+    if (!target || !draft) throw new Error('missing preset');
+    const hw: HardwareSpec = { gpuName: 'H100 SXM', gpuCount: 2, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 100, reservePct: 5, overheadGB: 1 };
+    const base: CalcState = {
+      model: target,
+      quant: { weight: 'q4_k_m', kv: 'fp16' },
+      hardware: hw,
+      workload: { contextTokens: 32768, concurrentUsers: 9 },
+      speculative: { enabled: true, draftMode: 'preset', draftModel: draft, draftWeightQuant: 'fp16', k: 4, alpha: 0.7 },
+    };
+    const at9 = calculate(base);
+    expect(at9.fits).toBe(false); // reproduces the reported contradiction: 9 users don't actually fit
+    expect(at9.maxUsersAtContext).toBeLessThan(9); // ...so maxUsersAtContext must say so too
+
+    const fitsAt = (concurrentUsers: number) => calculate({ ...base, workload: { ...base.workload, concurrentUsers } }).fits;
+    const maxU = at9.maxUsersAtContext;
+    expect(Number.isFinite(maxU)).toBe(true);
+    expect(fitsAt(maxU)).toBe(true);
+    expect(fitsAt(maxU + 1)).toBe(false);
+
+    // The chosen context's row in the table must agree with maxUsersAtContext.
+    const row = at9.contextTable.find((r) => r.contextTokens === 32768);
+    expect(row?.maxUsers).toBe(maxU);
+
+    // maxContextForUsers must also account for the draft's per-token KV rate.
+    const withDraft = at9.maxContextForUsers;
+    const withoutDraftSpec = calculate({ ...base, speculative: { ...base.speculative!, enabled: false } });
+    expect(withDraft).toBeLessThan(withoutDraftSpec.maxContextForUsers);
+  });
+
+  it('fixedBytes + N × bytesPerUser reconstructs totalBytes exactly, with and without a draft (what Chart.tsx plots)', () => {
+    const draft = findModelPreset('meta-llama/Llama-3.1-8B-Instruct');
+    if (!draft) throw new Error('missing preset');
+    const off = calculate(state());
+    const N0 = 4; // matches the `state()` helper's workload.concurrentUsers
+    expect(off.fixedBytes + N0 * off.bytesPerUser).toBeCloseTo(off.totalBytes, 6);
+    // Off: fixedBytes/bytesPerUser must be bit-identical to the pre-existing weightBytes+overheadBytes / kvBytesPerRequest.
+    expect(off.fixedBytes).toBe(off.weightBytes + off.overheadBytes);
+    expect(off.bytesPerUser).toBe(off.kvBytesPerRequest);
+
+    const on = calculate(state({ speculative: { enabled: true, draftMode: 'preset', draftModel: draft, draftWeightQuant: 'fp16', k: 4, alpha: 0.7 } }));
+    const N = 4; // matches the `state()` helper's workload.concurrentUsers
+    expect(on.fixedBytes + N * on.bytesPerUser).toBeCloseTo(on.totalBytes, 6);
+    expect(on.fixedBytes).toBeGreaterThan(on.weightBytes + on.overheadBytes); // includes draft weights
+    expect(on.bytesPerUser).toBeGreaterThan(on.kvBytesPerRequest); // includes draft KV
+  });
+});

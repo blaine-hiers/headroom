@@ -10,6 +10,7 @@ Headroom is a local-LLM VRAM and KV-cache calculator. Give it a Hugging Face rep
 - the most users that fit at your context, and the longest context that fits for your users
 - a bandwidth-bound decode-speed estimate
 - optionally, a cloud cost: $/hour and $ per million output tokens, given a $/GPU-hour price
+- an optional speculative-decoding estimate: draft-model memory and decode speedup
 
 It runs entirely in the browser. There is no backend and no account. The whole calculator state lives in the URL, so you can share a link to it.
 
@@ -145,6 +146,15 @@ The launch command omits any flag that equals the runtime's own default (e.g. `-
 - System RAM bandwidth has a small bundled preset list: DDR4 dual-channel ~50 GB/s, DDR5 dual-channel ~80–100 GB/s. Apple GPUs have no separate system RAM to offload to — it's unified with the GPU already — so the preset there is n/a; use the GPU's own bandwidth.
 - Max users, max context, the context table and the VRAM-vs-users chart all read `fixedBytes` and `bytesPerUser` (`CalcResult` fields shared with the rest of the app) instead of the raw weight/KV figures: with offload off these equal `weights + overheadGB × 1e9 × gpuCount` and `kvPerRequest(C)` exactly (bit-identical to the un-split numbers); with offload on, `fixedBytes` is `gpuLayers × bytesPerLayer + overheadGB × 1e9 × gpuCount` — the GPU-resident cost only, since the rest already spilled to RAM — so the whole page agrees with the Offloaded badge instead of reporting "0 max users" against the un-split weight total.
 - The offload inputs (enabled, system RAM, RAM bandwidth) are only written into the shared-link URL once they differ from the off-by-default state, so a fresh, untouched page doesn't grow a URL with meaningless `oe=0&oram=64&obw=50` keys.
+
+**Speculative decoding** (optional, off by default — a *Speculative decoding* disclosure). A small draft model proposes `k` tokens per step; the target verifies them in one pass and keeps the accepted prefix.
+
+- **Draft model**: a preset (its own `ModelSpec`, so its KV cache is estimated exactly the same way as the target's), a manually entered parameter count (weights only — no KV estimate, since the architecture is unknown), or "none" (n-gram / prompt-lookup drafting: no model, no memory, no per-step cost).
+- **Memory**: the draft's weights at its own chosen quant, plus its KV cache at the target's context and user count, are added everywhere memory is computed — `total`/`fits`, `maxUsersAtContext`, `maxContextForUsers`, every row of the context table, and the VRAM-vs-users chart — exactly like the target's own weights and KV. `CalcResult.fixedBytes` and `.bytesPerUser` carry the combined (target + draft) figures those all read from, so they can never disagree with each other.
+- **Expected tokens per verify step**: `E = (1 − α^(k+1)) / (1 − α)`, i.e. `Σ α^i` for `i = 0..k`. This is a removable 0/0 singularity at `α = 1`; the limit there is `k + 1` (every draft token accepted, plus the target's own bonus token). At `α = 0` it is `1` (the target always falls back to generating on its own).
+- **Verify step time**: `targetStepSeconds + k × draftStepSeconds`, where each step time is `1 / stepsPerSec` from the same bandwidth-bound decode formula above — the draft model reuses the target's own `efficiency` (same GPUs, same tensor-parallel penalty), not a separate check for the draft's own head count. n-gram/prompt-lookup drafting has no model forward pass, so `draftStepSeconds = 0`.
+- **Speculative tok/s** = `E / verifyStepSeconds` per user; the **multiplier** reported is this divided by the no-speculation `perUserTokS`. Speculative decoding helps most at **low concurrency**: as concurrent users grow, KV-cache reads dominate both the draft's and the target's step time, so the gain shrinks toward whatever the weight-only ratio between the two models allows.
+- With speculation off, none of the above numbers change anything else on the page.
 
 ## Where the model data comes from
 

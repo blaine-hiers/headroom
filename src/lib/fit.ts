@@ -2,6 +2,7 @@ import { resolveWeights } from './fileWeights';
 import { kvBytesForContext, kvBytesPerToken } from './kvcache';
 import { estimateTtft, prefillFlops } from './prefill';
 import { offloadDecodeThroughput, planOffload, resolveOffload, splitByLayerFraction } from './offload';
+import { DISABLED_SPECULATIVE, draftKvBytesPerRequest, speculativeMemory, speculativeThroughput } from './speculative';
 import { checkTensorParallelSplit, tensorParallelEfficiency } from './tensorParallel';
 import { DECODE_EFFICIENCY, decodeThroughput } from './throughput';
 import type { CalcResult, CalcState, HardwareSpec, RuntimeKey } from './types';
@@ -125,8 +126,16 @@ export function calculate(state: CalcState): CalcResult {
   const weights = resolved.bytes;
   const overhead = overheadBytesForRuntime(hardware, runtime);
   const usable = usableBytesForRuntime(hardware, runtime);
-  const fixed = weights + overhead;
-  const total = fixed + allUsers;
+
+  // Speculative decoding (off by default): the draft model's weights and its own KV cache,
+  // at the same context and user count, are added to the fit calculation like any other cost.
+  const spec = state.speculative ?? DISABLED_SPECULATIVE;
+  const draftMemory = speculativeMemory(spec, ctx, users, quant.kv);
+  const fixed = weights + overhead + draftMemory.weightBytes;
+  // Per-user rate at the chosen context: target KV per request + the draft's own KV per
+  // request. Used for total/fits, maxUsersAtContext, and the chart, so all three agree.
+  const bytesPerUser = perRequest + draftMemory.kvBytesPerRequest;
+  const total = fixed + users * bytesPerUser;
 
   // CPU/RAM layer offload (llama.cpp's -ngl): off unless hardware.offload.enabled (see offload.ts).
   // KV stays on the GPU (llama.cpp's default), so only weight bytes are split here.
@@ -134,14 +143,14 @@ export function calculate(state: CalcState): CalcResult {
   const offload = planOffload({
     weightBytes: weights,
     numLayers: model.numLayers,
-    usableGpuBytes: usable - overhead - allUsers,
+    usableGpuBytes: usable - overhead - draftMemory.weightBytes - users * bytesPerUser,
     offload: offloadSpec,
   });
   // Capacity math (max users/context, the context table, the chart) treats the GPU-resident
   // weights as the fixed cost once offload is on, assuming the rest already spilled to RAM —
   // the same simplification planOffload makes, so they agree with the fit/offload badge.
   // Bit-identical to `fixed` when offload is off/absent (no separate computation).
-  const fixedBytes = offloadSpec.enabled ? offload.gpuWeightBytes + overhead : fixed;
+  const fixedBytes = offloadSpec.enabled ? offload.gpuWeightBytes + overhead + draftMemory.weightBytes : fixed;
 
   const contexts = new Set<number>(TABLE_CONTEXTS);
   contexts.add(ctx);
@@ -149,8 +158,15 @@ export function calculate(state: CalcState): CalcResult {
     .sort((a, b) => a - b)
     .map((c) => {
       const kvReq = kvBytesForContext(model, kvContextForRuntime(c, runtime), quant.kv) * kvReplication;
-      return { contextTokens: c, kvBytesPerRequest: kvReq, maxUsers: maxUsers(usable, fixedBytes, kvReq) };
+      // maxUsers at this row's context must include the draft's KV at that same context, or
+      // it silently understates the true cost per user (the draft rides along at every context).
+      const combinedKvReq = kvReq + draftKvBytesPerRequest(spec, c, quant.kv);
+      return { contextTokens: c, kvBytesPerRequest: kvReq, maxUsers: maxUsers(usable, fixedBytes, combinedKvReq) };
     });
+
+  // Combined per-token rate (full-attention, conservative) for maxContextForUsers: the
+  // draft's own KV rides along at every context, same as its per-request KV does above.
+  const bytesPerTokenFull = perToken + draftMemory.kvBytesPerToken;
 
   const activeWeightBytes = resolved.activeBytes;
   // Multi-GPU tensor-parallel communication overhead, as a small labelled efficiency
@@ -191,6 +207,14 @@ export function calculate(state: CalcState): CalcResult {
           ramBandwidthGBs: offloadSpec.ramBandwidthGBs,
           gpuEfficiency: offloadEfficiency,
         });
+  // Draft steps reuse the target's own bandwidth/efficiency model (same GPUs serve both).
+  const draftThroughput = speculativeThroughput(
+    spec,
+    { perUserTokS: offloadThroughput.perUserTokS, efficiency: offloadThroughput.efficiency },
+    { activeWeightBytes: draftMemory.activeWeightBytes, kvBytesPerRequest: draftMemory.kvBytesPerRequest },
+    users,
+    { bandwidthGBs: hardware.bandwidthGBs, gpuCount: hardware.gpuCount },
+  );
 
   return {
     kvBytesPerToken: perToken,
@@ -207,13 +231,14 @@ export function calculate(state: CalcState): CalcResult {
     headroomBytes: usable - total,
     fits: total <= usable,
     fixedBytes,
-    bytesPerUser: perRequest,
-    maxUsersAtContext: maxUsers(usable, fixedBytes, perRequest),
-    maxContextForUsers: maxContext(usable, fixedBytes, users, perToken, model.maxPositionEmbeddings, runtime),
+    bytesPerUser,
+    maxUsersAtContext: maxUsers(usable, fixedBytes, bytesPerUser),
+    maxContextForUsers: maxContext(usable, fixedBytes, users, bytesPerTokenFull, model.maxPositionEmbeddings, runtime),
     contextTable,
     throughput: offloadThroughput,
     tensorParallel,
     prefill: { ttftSeconds: ttft.ttftSeconds, flops: pf.flops, mfu: ttft.mfu, headsSource: pf.headsSource },
     offload,
+    speculative: { enabled: spec.enabled, memory: draftMemory, throughput: draftThroughput },
   };
 }

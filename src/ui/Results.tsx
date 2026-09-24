@@ -137,6 +137,7 @@ export function Results({ state, result }: Props) {
           <Bytes value={result.totalBytes} stacked />
           <p className="muted">
             of <Bytes value={result.usableBytes} /> usable
+            {result.speculative.enabled && result.speculative.memory.totalBytes > 0 && ' (includes the draft model)'}
           </p>
         </div>
       </div>
@@ -147,9 +148,7 @@ export function Results({ state, result }: Props) {
           <p className="big num">{users(result.maxUsersAtContext)}</p>
           <p className="muted">
             {fixedTooBig
-              ? offloadEnabled
-                ? 'GPU-resident weights + overhead alone exceed usable VRAM'
-                : 'weights + overhead alone exceed usable VRAM'
+              ? `${offloadEnabled ? 'GPU-resident weights' : 'weights'} + overhead${result.speculative.memory.weightBytes > 0 ? ' + draft weights' : ''} alone exceed usable VRAM`
               : 'concurrent requests, each at full context'}
           </p>
         </div>
@@ -228,6 +227,33 @@ export function Results({ state, result }: Props) {
       </div>
 
       <CostCard hardware={hardware} result={result} concurrentUsers={N} />
+      {result.speculative.enabled && (
+        <div className="card">
+          <h3>Decode throughput (speculative)</h3>
+          <div className="tput">
+            <div>
+              <p className="big num">{tokS(result.speculative.throughput.perUserTokS)}</p>
+              <p className="muted">tok/s per user</p>
+            </div>
+            <div>
+              <p className="big num">{tokS(result.speculative.throughput.aggregateTokS)}</p>
+              <p className="muted">tok/s aggregate</p>
+            </div>
+          </div>
+          <p className="help">
+            ×{formatNumber(result.speculative.throughput.multiplier, 2)} vs no speculation ·{' '}
+            {formatNumber(result.speculative.throughput.expectedTokensPerStep, 2)} expected tokens/verify step. Helps most at low
+            concurrency — KV-cache reads dominate both models' steps as concurrent users grow, shrinking the gain.
+          </p>
+          {result.speculative.memory.totalBytes > 0 && (
+            <p className="muted">
+              Draft model adds <Bytes value={result.speculative.memory.totalBytes} /> to VRAM (
+              <Bytes value={result.speculative.memory.weightBytes} /> weights + <Bytes value={result.speculative.memory.kvBytesAllUsers} /> KV).
+            </p>
+          )}
+        </div>
+      )}
+
       <Chart result={result} users={N} />
       <LaunchCommand state={state} />
       <ShowTheMath state={state} result={result} />

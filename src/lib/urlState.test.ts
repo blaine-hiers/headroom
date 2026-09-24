@@ -230,3 +230,40 @@ describe('urlState', () => {
     expect(decodeState(`${encodeState(fallback)}&fwb=-1&fwq=q4_k_m`, fallback)).toBe(fallback);
   });
 });
+
+describe('urlState: speculative decoding', () => {
+  it('a state with no speculative field round-trips without one (old links keep working)', () => {
+    expect(decodeState(encodeState(fallback), fallback)).toEqual(fallback);
+    expect(encodeState(fallback)).not.toContain('se=');
+  });
+
+  it("round-trips a 'none' (n-gram) config", () => {
+    const s: CalcState = { ...fallback, speculative: { enabled: true, draftMode: 'none', draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 } };
+    expect(decodeState(encodeState(s), fallback)).toEqual(s);
+  });
+
+  it("round-trips a 'preset' draft model", () => {
+    const draft = MODEL_PRESETS.find((m) => m.id === 'meta-llama/Llama-3.1-8B-Instruct');
+    if (!draft) throw new Error('missing preset');
+    const s: CalcState = {
+      ...fallback,
+      speculative: { enabled: true, draftMode: 'preset', draftModel: draft, draftWeightQuant: 'q8_0', k: 6, alpha: 0.85 },
+    };
+    expect(decodeState(encodeState(s), fallback)).toEqual(s);
+  });
+
+  it("round-trips a 'custom' draft (params only)", () => {
+    const s: CalcState = {
+      ...fallback,
+      speculative: { enabled: true, draftMode: 'custom', draftParams: 1_500_000_000, draftWeightQuant: 'bf16', k: 4, alpha: 0.7 },
+    };
+    expect(decodeState(encodeState(s), fallback)).toEqual(s);
+  });
+
+  it('an unknown preset id in the URL falls back to no draft model', () => {
+    const qs = `${encodeState({ ...fallback, speculative: { enabled: true, draftMode: 'preset', draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 } })}&sd=nonexistent/model`;
+    const decoded = decodeState(qs, fallback);
+    expect(decoded.speculative?.draftMode).toBe('none');
+    expect(decoded.speculative?.draftModel).toBeUndefined();
+  });
+});

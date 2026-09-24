@@ -114,6 +114,57 @@ export interface FileWeights {
 
 /** Where the weight figure came from. */
 export type WeightSource = 'files' | 'estimate';
+export type DraftMode = 'none' | 'preset' | 'custom';
+
+/**
+ * Speculative decoding: a small draft model proposes k tokens per step, the target model
+ * verifies them in one pass, and accepted tokens are kept. 'none' is n-gram / prompt-lookup
+ * drafting (no model, no memory, no per-step compute cost).
+ */
+export interface SpeculativeConfig {
+  enabled: boolean;
+  draftMode: DraftMode;
+  /** draftMode 'preset': the draft's own ModelSpec, so its KV cache can be estimated exactly. */
+  draftModel?: ModelSpec;
+  /** draftMode 'custom': parameter count only. KV cache is not estimated (architecture unknown). */
+  draftParams?: number;
+  draftWeightQuant: WeightQuantKey;
+  /** Draft tokens proposed per verify step. */
+  k: number;
+  /** Expected per-token acceptance probability (workload-dependent). */
+  alpha: number;
+}
+
+export interface SpeculativeMemory {
+  /** Draft weights resident in VRAM (all params, at draftWeightQuant). 0 when disabled or draftMode 'none'. */
+  weightBytes: number;
+  /** Draft weights read per decode step (handles MoE active params for preset drafts). */
+  activeWeightBytes: number;
+  /** Draft KV cache for one request at the target's context; 0 unless draftMode 'preset'. */
+  kvBytesPerRequest: number;
+  kvBytesAllUsers: number;
+  /** Draft KV cache per token, full-attention rate; 0 unless draftMode 'preset'. Feeds maxContextForUsers. */
+  kvBytesPerToken: number;
+  totalBytes: number;
+}
+
+export interface SpeculativeThroughput {
+  /** (1 − α^(k+1)) / (1 − α); the removable α = 1 singularity resolves to k + 1. */
+  expectedTokensPerStep: number;
+  targetStepSeconds: number;
+  draftStepSeconds: number;
+  verifyStepSeconds: number;
+  perUserTokS: number;
+  aggregateTokS: number;
+  /** perUserTokS vs the no-speculation baseline; 1 when disabled. */
+  multiplier: number;
+}
+
+export interface SpeculativeResult {
+  enabled: boolean;
+  memory: SpeculativeMemory;
+  throughput: SpeculativeThroughput;
+}
 
 export type WeightQuantKey =
   | 'fp32'
@@ -203,6 +254,8 @@ export interface CalcState {
   workload: Workload;
   /** Serving runtime profile; defaults to 'generic' so existing links are unaffected. */
   runtime?: RuntimeKey;
+  /** Optional so existing states/URLs decode unchanged; treated as disabled when absent. */
+  speculative?: SpeculativeConfig;
 }
 
 /** Everything the results column needs; all sizes in bytes. */
@@ -223,13 +276,13 @@ export interface CalcResult {
   headroomBytes: number; // usable - total (negative when it does not fit)
   fits: boolean;
   /**
-   * Everything that doesn't scale with concurrent users: weights + overhead normally, or —
-   * with CPU/RAM offload on — the GPU-resident weights + overhead, since the rest already
-   * spilled to RAM. Shared by the capacity math (maxUsers/maxContext), the "fixed alone
+   * Everything that doesn't scale with concurrent users: weights + overhead + the speculative
+   * draft's weights normally, or — with CPU/RAM offload on — the GPU-resident weights + overhead +
+   * draft weights, since the rest already spilled to RAM. Shared by the capacity math (maxUsers/maxContext), the "fixed alone
    * exceeds usable" check, and the chart, so they all agree with the fit/offload badge.
    */
   fixedBytes: number;
-  /** Everything that scales per user at the chosen context: KV bytes per request (KV always stays on the GPU). */
+  /** Everything that scales per user at the chosen context: target KV per request + the draft's KV per request (KV always stays on the GPU). */
   bytesPerUser: number;
   maxUsersAtContext: number;
   maxContextForUsers: number;
@@ -242,4 +295,6 @@ export interface CalcResult {
   prefill: { ttftSeconds: number; flops: number; mfu: number; headsSource: 'model' | 'hiddenSize-fallback' };
   /** CPU/RAM layer split (see offload.ts). Always present; a no-op split (all layers on GPU) when offload is disabled. */
   offload: OffloadPlan;
+  /** Speculative-decoding memory and speedup estimate (see speculative.ts). enabled: false when off/absent. */
+  speculative: SpeculativeResult;
 }

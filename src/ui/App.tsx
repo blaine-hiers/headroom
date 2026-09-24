@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useReducer } from 'react';
-import { calculate, encodeState } from '../lib';
+import { calculate, DISABLED_SPECULATIVE, encodeState } from '../lib';
 import type { CalcState } from '../lib';
 import { HardwarePanel } from './HardwarePanel';
 import { Header } from './Header';
 import { ModelPanel } from './ModelPanel';
 import { QuantPanel } from './QuantPanel';
 import { Results } from './Results';
+import { SpeculativeFields } from './SpeculativeFields';
 import { initialState, maxContextFor, reducer } from './state';
 import { WorkloadPanel } from './WorkloadPanel';
 
@@ -58,6 +59,10 @@ export default function App() {
             workload={state.workload}
             maxContext={maxContextFor(state.model)}
             onChange={(patch) => dispatch({ type: 'workload', patch })}
+          />
+          <SpeculativeFields
+            speculative={state.speculative ?? DISABLED_SPECULATIVE}
+            onChange={(patch) => dispatch({ type: 'speculative', patch })}
           />
         </div>
         <Results state={state} result={result} />
