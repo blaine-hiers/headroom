@@ -20,6 +20,21 @@ function badge(): HTMLElement {
   return el;
 }
 
+/**
+ * Model rows carry meta text (params, context, tags) right after their name with no separating
+ * space, so match by prefix only (a trailing \b would require a non-word char there, which a
+ * name ending in a digit followed by "8.03B params…" never has).
+ */
+function modelRowName(name: string): RegExp {
+  return new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+}
+
+/** Opens a provider's model list and clicks the named model, mirroring what the old flat preset chip did. */
+async function pickProviderModel(user: ReturnType<typeof userEvent.setup>, provider: string, modelName: string) {
+  await user.click(screen.getByRole('button', { name: provider }));
+  await user.click(screen.getByRole('button', { name: modelRowName(modelName) }));
+}
+
 beforeEach(() => {
   window.localStorage.clear();
   window.history.replaceState(null, '', '/');
@@ -42,10 +57,10 @@ describe('App', () => {
     expect(screen.getByText('· built-in preset')).toBeInTheDocument();
   });
 
-  it('switching to the Llama 3.1 8B chip changes the KV per token figure', async () => {
+  it('switching to the Llama 3.1 8B model changes the KV per token figure', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('button', { name: 'Llama 3.1 8B' }));
+    await pickProviderModel(user, 'Meta', 'Llama 3.1 8B');
     // 2 × 32 × 8 × 128 × 2 = 131,072 B
     expect(screen.getAllByText('131 KB').length).toBeGreaterThan(0);
     expect(screen.getAllByText('128 KiB').length).toBeGreaterThan(0);
@@ -221,7 +236,7 @@ describe('App', () => {
   it('the context slider sits on its top stop at a non-power-of-two model max', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('button', { name: 'Qwen3-32B' })); // max 40960
+    await pickProviderModel(user, 'Qwen', 'Qwen3-32B'); // max 40960
     const ctx = screen.getByLabelText('Context tokens', { exact: true });
     await user.clear(ctx);
     await user.type(ctx, '40960');
@@ -232,7 +247,7 @@ describe('App', () => {
   it('context-table rows above the model max are greyed and tagged, but still shown', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('button', { name: 'Qwen3-32B' })); // max 40960
+    await pickProviderModel(user, 'Qwen', 'Qwen3-32B'); // max 40960
     const rows = screen.getAllByRole('row').filter((r) => r.classList.contains('over-max'));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent('128K');
@@ -245,7 +260,7 @@ describe('App', () => {
     const user = userEvent.setup();
     render(<App />);
     expect(screen.getByText(/70\.55B active per token \(dense, all params\)/)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Qwen3-30B-A3B' }));
+    await pickProviderModel(user, 'Qwen', 'Qwen3-30B-A3B');
     expect(screen.getByText(/3\.04B active per token \(MoE, structural estimate\)/)).toBeInTheDocument();
   });
 
@@ -282,7 +297,7 @@ describe('App', () => {
     expect(storedRecents[0].id).toBe('Qwen/Qwen2.5-7B-Instruct');
 
     // Switch to a different model (Llama 3.1 8B preset)
-    await user.click(screen.getByRole('button', { name: 'Llama 3.1 8B' }));
+    await pickProviderModel(user, 'Meta', 'Llama 3.1 8B');
     expect(screen.getByText('· built-in preset')).toBeInTheDocument();
 
     // Reset the fetch mock call count

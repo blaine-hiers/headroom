@@ -249,6 +249,7 @@ export default function App() {
             <ModelPanel
               key={selected}
               model={activeState.model}
+              weightQuant={activeState.quant.weight}
               onLoad={(spec) => activeDispatch({ type: 'loadModel', spec })}
               onEdit={(patch) => activeDispatch({ type: 'editModel', patch })}
             />
