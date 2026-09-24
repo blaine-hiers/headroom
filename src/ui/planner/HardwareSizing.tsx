@@ -1,6 +1,8 @@
 import { useId, useMemo, useState } from 'react';
 import type { Dispatch } from 'react';
 import {
+  clampWorkloadFor,
+  DEFAULT_MODEL_PRESET,
   DEFAULT_OFFLOAD,
   findModelPreset,
   formatNumber,
@@ -38,13 +40,17 @@ function resolveModel(hs: HardwareSizingState, planner: PlannerState, calculator
   if (hs.useCalculatorModel && calculatorModel) return { model: calculatorModel, source: 'calculator' };
   if (hs.modelId) {
     const m = findModelPreset(hs.modelId);
-    if (m) return { model: m, source: 'catalog' };
+    // A handoff (plannerState's setHandoffModelId, #27 review item 3) writes its model straight
+    // into hs.modelId so it wins over whatever was explicitly picked here before, and so the
+    // existing `phm` URL key persists it (#27 review item 4). It's still labeled "from step 1"
+    // as long as nothing has picked a different model here since.
+    if (m) return { model: m, source: hs.modelId === planner.handoffModelId ? 'handoff' : 'catalog' };
   }
   if (planner.handoffModelId) {
     const m = findModelPreset(planner.handoffModelId);
     if (m) return { model: m, source: 'handoff' };
   }
-  return { model: MODEL_PRESETS[0], source: 'default' };
+  return { model: DEFAULT_MODEL_PRESET, source: 'default' };
 }
 
 function HwSizingRow({ row, dimmed, onUse }: { row: HardwareSizingRow; dimmed: boolean; onUse: (row: HardwareSizingRow) => void }) {
@@ -125,6 +131,10 @@ export function HardwareSizing({ planner, dispatch, openInCalculator, calculator
   );
 
   const load = useMemo(() => ({ contextTokens: hs.contextTokens, concurrentUsers: hs.concurrentUsers }), [hs.contextTokens, hs.concurrentUsers]);
+  // sizeHardware/scalingStrip clamp this same way internally (see hardwareSizing.ts), so this is
+  // only for the "typed vs. what's actually being sized" note below — never fed to calculate()
+  // unclamped itself.
+  const effectiveLoad = useMemo(() => clampWorkloadFor(model, load), [model, load]);
   const { qualifying, nearMisses } = useMemo(() => sizeHardware(model, load, options), [model, load, options]);
   const strip = useMemo(() => scalingStrip(model, hs.contextTokens, options), [model, hs.contextTokens, options]);
 
@@ -187,6 +197,11 @@ export function HardwareSizing({ planner, dispatch, openInCalculator, calculator
           onChange={(v) => patch({ contextTokens: v })}
         />
       </div>
+      {effectiveLoad.contextTokens !== hs.contextTokens && (
+        <p className="help">
+          Sizing at {formatNumber(effectiveLoad.contextTokens)} tok context — {model.name}'s max, below the {formatNumber(hs.contextTokens)} tok typed above.
+        </p>
+      )}
 
       <div className="grid2">
         <div className="field">

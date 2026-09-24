@@ -3,6 +3,7 @@ import { cloudCostFor } from './cost';
 import type { CloudCost } from './cost';
 import { formatNumber, formatSeconds } from './format';
 import { CONSUMER_UNUSUAL_GPU_COUNT, HARDWARE_FINDER_COUNTS } from './hardwareFinder';
+import { clampWorkloadFor } from './limits';
 import { CUSTOM_GPU_NAME, GPU_PRESETS } from './presets/gpus';
 import type { GpuPreset, GpuVendor } from './presets/gpus';
 import type { CalcResult, CalcState, HardwareSpec, ModelSpec, OffloadSpec, Quant, RuntimeKey, Workload } from './types';
@@ -82,7 +83,12 @@ function buildHardwareSizingState(model: ModelSpec, load: HardwareSizingLoad, gp
     model,
     quant: options.quant,
     hardware,
-    workload: { contextTokens: load.contextTokens, concurrentUsers: load.concurrentUsers },
+    // Clamped exactly like "Use" (openInCalculator -> loadPartial) clamps on load: context to
+    // [MIN_CONTEXT, this model's own maxPositionEmbeddings], users to [1, MAX_USERS]. Without
+    // this, a typed context above the model's max (e.g. left over from a previously selected,
+    // longer-context model) made this row's `result` disagree with what "Use" actually loads —
+    // see #27 review item 1.
+    workload: clampWorkloadFor(model, load),
     runtime: options.runtime,
   };
 }

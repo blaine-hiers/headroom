@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { encodeState, formatBytes, formatNumber, formatTokens, MODEL_PRESETS, sizeHardware } from '../lib';
+import { DEFAULT_MODEL_PRESET, encodeState, formatBytes, formatNumber, formatTokens, sizeHardware } from '../lib';
 import type { CalcState } from '../lib';
 import qwenApi from '../lib/__fixtures__/qwen2.5-7b-instruct.api.json';
 import qwenConfig from '../lib/__fixtures__/qwen2.5-7b-instruct.json';
@@ -676,10 +676,10 @@ describe('Tabs (#21)', () => {
     await user.click(screen.getByRole('tab', { name: 'Calculator' }));
 
     // Independently compute what "Use" should have produced, from HardwareSizing's own defaults
-    // (no handoff/Calculator-model override: MODEL_PRESETS[0], 32 users, 8K context, q4_k_m/fp16,
-    // generic runtime, 20 tok/s floor) — the same call HardwareSizing.tsx makes.
+    // (no handoff/Calculator-model override: DEFAULT_MODEL_PRESET, 32 users, 8K context,
+    // q4_k_m/fp16, generic runtime, 20 tok/s floor) — the same call HardwareSizing.tsx makes.
     const { qualifying } = sizeHardware(
-      MODEL_PRESETS[0],
+      DEFAULT_MODEL_PRESET,
       { contextTokens: 8192, concurrentUsers: 32 },
       { quant: { weight: 'q4_k_m', kv: 'fp16' }, runtime: 'generic', minPerUserTokS: 20 },
     );

@@ -9,6 +9,7 @@ import {
   sizeHardware,
 } from './hardwareSizing';
 import type { HardwareSizingOptions, HardwareSizingRow } from './hardwareSizing';
+import { clampWorkloadFor, MAX_USERS } from './limits';
 import { findGpuPreset } from './presets/gpus';
 import type { CalcState, HardwareSpec } from './types';
 
@@ -239,5 +240,42 @@ describe('scalingStrip', () => {
     const at256 = strip.find((e) => e.users === 256)?.row;
     expect(at256).toBeDefined();
     expect(at256?.result.throughput.aggregateTokS).toBeGreaterThan(0);
+  });
+});
+
+// Regression for #27 review item 1: sizeHardware used to run calculate() at the raw, unclamped
+// workload while "Use" (HardwareSizing.tsx's useRow -> openInCalculator -> the Calculator's
+// loadPartial) clamps context to the model's own maxPositionEmbeddings and users to MAX_USERS —
+// so a row could show, say, 4 GB headroom while clicking "Use" landed on a config with 98 GB of
+// headroom because the context actually loaded was far shorter than what the row calculated at.
+describe('sizeHardware clamps the workload per model before calculating (#27 review item 1)', () => {
+  it('clamps an over-max context down to the model max, matching what "Use" would load', () => {
+    const smallCtxModel = makeSpec({ params: 1e9, activeParams: 1e9, maxPositionEmbeddings: 4096 });
+    const load = { contextTokens: 131072, concurrentUsers: 4 };
+    const { qualifying, nearMisses } = sizeHardware(smallCtxModel, load, { ...baseOptions, minPerUserTokS: 0 });
+    const rows = [...qualifying, ...nearMisses];
+    expect(rows.length).toBeGreaterThan(0);
+
+    const expectedWorkload = clampWorkloadFor(smallCtxModel, load);
+    expect(expectedWorkload).toEqual({ contextTokens: 4096, concurrentUsers: 4 });
+    for (const row of rows) {
+      // row.state is exactly what "Use" (openInCalculator) loads, so its workload must already
+      // be clamped rather than the raw, over-max value that was typed.
+      expect(row.state.workload).toEqual(expectedWorkload);
+      // The row's own displayed numbers (headroom, tok/s, ...) must come from the same, clamped
+      // calculation "Use" would reproduce — not from the unclamped context.
+      expect(row.result).toEqual(calculate(row.state));
+      expect(row.result).not.toEqual(calculate({ ...row.state, workload: load }));
+    }
+  });
+
+  it('clamps an out-of-range user count to [1, MAX_USERS] the same way', () => {
+    const model = makeSpec({ params: 1e9, activeParams: 1e9 });
+    const { qualifying, nearMisses } = sizeHardware(model, { contextTokens: 8192, concurrentUsers: 999_999_999 }, { ...baseOptions, minPerUserTokS: 0 });
+    const rows = [...qualifying, ...nearMisses];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.state.workload.concurrentUsers).toBe(MAX_USERS);
+    }
   });
 });

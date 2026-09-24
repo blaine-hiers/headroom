@@ -3,7 +3,7 @@
 
 import { calculate } from './fit';
 import { formatBytes, formatNumber, formatTokens } from './format';
-import { MAX_GPUS, MAX_USERS, MIN_CONTEXT } from './limits';
+import { clampWorkloadFor, MAX_GPUS } from './limits';
 import { CUSTOM_GPU_NAME, GPU_PRESETS, findGpuPreset } from './presets/gpus';
 import type { GpuPreset } from './presets/gpus';
 import type { CatalogEntry, TaskTag } from './presets/catalog';
@@ -91,15 +91,11 @@ function hardwareFromGpuPreset(gpu: GpuPreset, gpuCount: number): HardwareSpec {
  * no-op, but it stops a stray out-of-range value (e.g. a crafted URL) from ever reaching `calculate()`.
  */
 function calcStateFor(model: ModelSpec, hardware: HardwareSpec, constraints: TaskPickerConstraints): CalcState {
-  const maxContext = Math.max(MIN_CONTEXT, Math.floor(model.maxPositionEmbeddings) || MIN_CONTEXT);
   return {
     model,
     quant: { weight: constraints.weightQuant, kv: constraints.kvQuant },
     hardware,
-    workload: {
-      contextTokens: Math.round(clampNum(constraints.contextTokens, MIN_CONTEXT, maxContext)),
-      concurrentUsers: Math.round(clampNum(constraints.concurrentUsers, 1, MAX_USERS)),
-    },
+    workload: clampWorkloadFor(model, { contextTokens: constraints.contextTokens, concurrentUsers: constraints.concurrentUsers }),
     runtime: 'generic',
   };
 }

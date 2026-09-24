@@ -2,10 +2,11 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useReducer } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { calculate } from '../../lib';
+import { calculate, findModelPreset } from '../../lib';
 import type { OpenInCalculatorPatch } from '../state';
 import { HardwareSizing } from './HardwareSizing';
-import { initialPlannerState, plannerReducer } from './plannerState';
+import { DEFAULT_HARDWARE_SIZING, initialPlannerState, plannerReducer } from './plannerState';
+import type { PlannerState } from './plannerState';
 
 function Harness({ openInCalculator }: { openInCalculator: (patch: OpenInCalculatorPatch) => void }) {
   const [planner, dispatch] = useReducer(plannerReducer, initialPlannerState);
@@ -66,5 +67,70 @@ describe('HardwareSizing', () => {
     }
     render(<HandoffHarness openInCalculator={vi.fn()} />);
     expect(screen.getByText(/handed over from step 1/)).toBeInTheDocument();
+  });
+
+  // Regression for #27 review item 3: "Size hardware" used to silently do nothing once step 2
+  // already had an explicit model pick or "use the Calculator's model" on, because resolveModel
+  // checked those before the handoff. A handoff (setHandoffModelId) must now win over both.
+  it('"Size hardware" wins over an existing explicit pick and "use Calculator model" (#27 review item 3)', async () => {
+    const user = userEvent.setup();
+    const seventyB = findModelPreset('meta-llama/Llama-3.3-70B-Instruct')!;
+
+    function OverrideHarness({ openInCalculator }: { openInCalculator: (patch: OpenInCalculatorPatch) => void }) {
+      const initial: PlannerState = {
+        hardwareSizing: { ...DEFAULT_HARDWARE_SIZING, modelId: seventyB.id, useCalculatorModel: true },
+      };
+      const [planner, dispatch] = useReducer(plannerReducer, initial);
+      return (
+        <>
+          <HardwareSizing planner={planner} dispatch={dispatch} openInCalculator={openInCalculator} calculatorModel={seventyB} />
+          <button type="button" onClick={() => dispatch({ type: 'setHandoffModelId', modelId: 'meta-llama/Llama-3.1-8B-Instruct' })}>
+            simulate step 1 handoff
+          </button>
+        </>
+      );
+    }
+    render(<OverrideHarness openInCalculator={vi.fn()} />);
+
+    expect(screen.getByDisplayValue('Llama 3.3 70B')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /Use the Calculator's current model/ })).toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: 'simulate step 1 handoff' }));
+
+    expect(screen.getByDisplayValue('Llama 3.1 8B')).toBeInTheDocument();
+    expect(screen.getByText(/handed over from step 1/)).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /Use the Calculator's current model/ })).not.toBeChecked();
+  });
+
+  // Regression for #27 review item 1: switching to a shorter-context model left the typed
+  // context above that model's max, so every row calculated at the raw, unclamped value instead
+  // of what "Use" would actually load — the UI must surface that the two now disagree.
+  it('shows a note and sizes at the model max when the typed context exceeds it (#27 review item 1)', async () => {
+    const user = userEvent.setup();
+    const openInCalculator = vi.fn();
+    function Harness2({ onOpenInCalculator }: { onOpenInCalculator: (patch: OpenInCalculatorPatch) => void }) {
+      const initial: PlannerState = { hardwareSizing: { ...DEFAULT_HARDWARE_SIZING, contextTokens: 131072 } };
+      const [planner, dispatch] = useReducer(plannerReducer, initial);
+      return <HardwareSizing planner={planner} dispatch={dispatch} openInCalculator={onOpenInCalculator} />;
+    }
+    render(<Harness2 onOpenInCalculator={openInCalculator} />);
+
+    const modelInput = screen.getByLabelText('Model');
+    await user.clear(modelInput);
+    await user.type(modelInput, 'Phi-4');
+    await user.tab(); // blur commits the text
+
+    expect(await screen.findByText(/Sizing at 16,384 tok context/)).toBeInTheDocument();
+
+    const useButtons = await screen.findAllByRole('button', { name: 'Use' });
+    expect(useButtons.length).toBeGreaterThan(0);
+    await user.click(useButtons[0]);
+
+    // "Use" must load the same clamped context the row (and the note) promised, not the raw
+    // 131,072 still sitting in the "Context per user" field.
+    const patch = openInCalculator.mock.calls[0][0] as OpenInCalculatorPatch;
+    expect(patch.workload?.contextTokens).toBe(16384);
+    const result = calculate(patch as Parameters<typeof calculate>[0]);
+    expect(result.headroomBytes).toBeGreaterThan(0);
   });
 });

@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import { MODEL_PRESETS, WEIGHT_QUANTS } from '../lib';
+import { DEFAULT_MODEL_PRESET, MODEL_PRESETS, WEIGHT_QUANTS } from '../lib';
 import type { DraftMode, SpeculativeConfig, WeightQuantKey } from '../lib';
 import { NumberField } from './NumberField';
 import { MAX_DRAFT_K } from './state';
@@ -17,7 +17,7 @@ export function SpeculativeFields({ speculative, onChange }: Props) {
 
   const setMode = (next: DraftMode) => {
     if (next === 'preset') {
-      onChange({ draftMode: 'preset', draftModel: speculative.draftModel ?? MODEL_PRESETS[0], draftParams: undefined });
+      onChange({ draftMode: 'preset', draftModel: speculative.draftModel ?? DEFAULT_MODEL_PRESET, draftParams: undefined });
     } else if (next === 'custom') {
       onChange({ draftMode: 'custom', draftModel: undefined, draftParams: speculative.draftParams ?? 1e9 });
     } else {
@@ -51,7 +51,7 @@ export function SpeculativeFields({ speculative, onChange }: Props) {
                 <label htmlFor={`${id}-preset`}>Preset</label>
                 <select
                   id={`${id}-preset`}
-                  value={speculative.draftModel?.id ?? MODEL_PRESETS[0].id}
+                  value={speculative.draftModel?.id ?? DEFAULT_MODEL_PRESET.id}
                   onChange={(e) => {
                     const spec = MODEL_PRESETS.find((p) => p.id === e.target.value);
                     if (spec) onChange({ draftModel: spec });

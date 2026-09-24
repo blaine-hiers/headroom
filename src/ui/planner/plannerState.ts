@@ -8,10 +8,26 @@
 // ("Which model for this task?") sets it via `setHandoffModelId`, step 2 ("What hardware to
 // serve N users?") reads it to preselect the model it sizes hardware for.
 
-import { DEFAULT_TASK_PICKER_CONSTRAINTS, GPU_VENDOR_GROUPS, KV_QUANTS, RUNTIME_KEYS, WEIGHT_QUANTS } from '../../lib';
+import {
+  DEFAULT_TASK_PICKER_CONSTRAINTS,
+  findModelPreset,
+  GPU_VENDOR_GROUPS,
+  KV_QUANTS,
+  MAX_CATALOG_CONTEXT,
+  MAX_USERS,
+  MIN_CONTEXT,
+  RUNTIME_KEYS,
+  WEIGHT_QUANTS,
+} from '../../lib';
 import type { GpuVendor, HardwareSizingSort, KvQuantKey, RuntimeKey, TaskPickerConstraints, WeightQuantKey } from '../../lib';
 
 const HARDWARE_SIZING_SORTS: readonly HardwareSizingSort[] = ['smallest', 'cheapest'];
+
+// Sane upper bounds for fields the HardwareSizing UI itself doesn't hard-cap the same way the
+// Calculator's own inputs do — a crafted `phmt`/`phtt` must still be clamped to something a real
+// user could have typed there (matches HardwareSizing.tsx's own NumberField max props).
+const MAX_MIN_PER_USER_TOK_S = 1000;
+const MAX_TTFT_SECONDS = 60;
 
 /** Step 2's own inputs (issue #25). Kept as one sub-object so it can be reset/patched as a unit. */
 export interface HardwareSizingState {
@@ -72,7 +88,18 @@ export function plannerReducer(state: PlannerState, action: PlannerAction): Plan
         const { handoffModelId: _drop, ...rest } = state;
         return rest;
       }
-      return { ...state, handoffModelId: action.modelId };
+      // The handoff must win over whatever step 2 already had explicitly picked, or "Size
+      // hardware" silently does nothing (#27 review item 3) — so this also clears
+      // hardwareSizing's own modelId/useCalculatorModel by writing the handed-off id straight
+      // into hardwareSizing.modelId instead. That keeps one source of truth and means the
+      // existing `phm` URL key already persists the handoff across reload/share (#27 review item
+      // 4), with no separate `handoffModelId` key needed. HardwareSizing.tsx's resolveModel still
+      // labels it "from step 1" by comparing hs.modelId back against handoffModelId.
+      return {
+        ...state,
+        handoffModelId: action.modelId,
+        hardwareSizing: { ...(state.hardwareSizing ?? DEFAULT_HARDWARE_SIZING), modelId: action.modelId, useCalculatorModel: false },
+      };
     }
     case 'taskPicker/setConstraints': {
       const base = state.taskPicker ?? DEFAULT_TASK_PICKER_CONSTRAINTS;
@@ -143,12 +170,17 @@ export function decodeHardwareSizingState(qs: string): HardwareSizingState | und
   const q = new URLSearchParams(qs.startsWith('?') ? qs.slice(1) : qs);
   if (!q.has(PH.concurrentUsers)) return undefined;
 
-  const num = (k: string, fallback: number): number => {
+  // Clamped the same way the Calculator's own inputs (and HardwareSizing.tsx's own NumberFields)
+  // are: a crafted `phu`/`phc`/`phmt` (negative, zero, huge, or non-finite) must never reach
+  // sizeHardware()'s calculate() calls unclamped (#27 review item 2).
+  const numClamped = (k: string, fallback: number, lo: number, hi: number): number => {
     const raw = q.get(k);
     if (raw === null) return fallback;
     const n = Number(raw);
-    return Number.isFinite(n) ? n : fallback;
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(hi, Math.max(lo, n));
   };
+  const intClamped = (k: string, fallback: number, lo: number, hi: number): number => Math.round(numClamped(k, fallback, lo, hi));
   const oneOf = <T extends string>(k: string, allowed: readonly T[], fallback: T): T => {
     const raw = q.get(k);
     return raw !== null && (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback;
@@ -156,20 +188,25 @@ export function decodeHardwareSizingState(qs: string): HardwareSizingState | und
 
   const result: HardwareSizingState = {
     useCalculatorModel: q.get(PH.useCalculatorModel) === '1',
-    concurrentUsers: num(PH.concurrentUsers, DEFAULT_HARDWARE_SIZING.concurrentUsers),
-    contextTokens: num(PH.contextTokens, DEFAULT_HARDWARE_SIZING.contextTokens),
+    concurrentUsers: intClamped(PH.concurrentUsers, DEFAULT_HARDWARE_SIZING.concurrentUsers, 1, MAX_USERS),
+    contextTokens: intClamped(PH.contextTokens, DEFAULT_HARDWARE_SIZING.contextTokens, MIN_CONTEXT, MAX_CATALOG_CONTEXT),
     weightQuant: oneOf(PH.weightQuant, Object.keys(WEIGHT_QUANTS) as WeightQuantKey[], DEFAULT_HARDWARE_SIZING.weightQuant),
     kvQuant: oneOf(PH.kvQuant, Object.keys(KV_QUANTS) as KvQuantKey[], DEFAULT_HARDWARE_SIZING.kvQuant),
     runtime: oneOf(PH.runtime, RUNTIME_KEYS, DEFAULT_HARDWARE_SIZING.runtime),
-    minPerUserTokS: num(PH.minPerUserTokS, DEFAULT_HARDWARE_SIZING.minPerUserTokS),
+    minPerUserTokS: numClamped(PH.minPerUserTokS, DEFAULT_HARDWARE_SIZING.minPerUserTokS, 0, MAX_MIN_PER_USER_TOK_S),
     offloadEnabled: q.get(PH.offloadEnabled) === '1',
     sort: oneOf(PH.sort, HARDWARE_SIZING_SORTS, DEFAULT_HARDWARE_SIZING.sort),
   };
+  // A model id must resolve in the bundled catalog — an unrecognized or crafted id is dropped
+  // rather than trusted, same as taskPickerUrl.ts validates its own gpu name.
   const modelId = q.get(PH.modelId);
-  if (modelId !== null) result.modelId = modelId;
+  if (modelId !== null && findModelPreset(modelId)) result.modelId = modelId;
   if (q.has(PH.maxTtftSeconds)) {
-    const maxTtft = num(PH.maxTtftSeconds, NaN);
-    if (Number.isFinite(maxTtft)) result.maxTtftSeconds = maxTtft;
+    // Zero, negative or non-finite means "no cap" in the UI (the checkbox is unticked), so those
+    // values are dropped rather than clamped to a fallback.
+    const raw = q.get(PH.maxTtftSeconds);
+    const n = raw === null ? NaN : Number(raw);
+    if (Number.isFinite(n) && n > 0) result.maxTtftSeconds = Math.min(MAX_TTFT_SECONDS, n);
   }
   const vendorRaw = q.get(PH.vendor);
   if (vendorRaw !== null && GPU_VENDOR_GROUPS.some((v) => v.vendor === vendorRaw)) result.vendor = vendorRaw as GpuVendor;

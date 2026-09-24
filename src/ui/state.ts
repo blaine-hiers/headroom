@@ -1,5 +1,6 @@
 import {
   activeParamsDetailed,
+  clampWorkloadFor,
   CUSTOM_GPU_NAME,
   decodeState,
   DEFAULT_OFFLOAD,
@@ -9,15 +10,17 @@ import {
   findModelPreset,
   MAX_GPUS,
   MAX_USERS,
+  maxContextFor,
   MIN_CONTEXT,
   MODEL_PRESETS,
   refreshWarnings,
 } from '../lib';
 import type { CalcState, HardwareSpec, ModelSpec, Quant, RuntimeKey, SpeculativeConfig, Workload } from '../lib';
 
-// Defined in src/lib/limits.ts (shared with taskPickerUrl.ts's decode clamping) and re-exported
-// here so every existing `import { MAX_GPUS } from './state'` (etc.) keeps working unchanged.
-export { MAX_GPUS, MAX_USERS, MIN_CONTEXT };
+// Defined in src/lib/limits.ts (shared with taskPickerUrl.ts's decode clamping, taskPicker.ts's
+// and hardwareSizing.ts's own workload clamps) and re-exported here so every existing
+// `import { MAX_GPUS, maxContextFor } from './state'` (etc.) keeps working unchanged.
+export { MAX_GPUS, MAX_USERS, maxContextFor, MIN_CONTEXT };
 /** Upper bound for the integer shape fields (heads, dims, vocab, ...), matching the Advanced inputs. */
 export const MAX_DIM = 1e7;
 export const MAX_PARAMS = 1e14;
@@ -51,11 +54,6 @@ export function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
 }
 
-/** Upper bound of the context control for a model (never below the minimum). */
-export function maxContextFor(model: ModelSpec): number {
-  return Math.max(MIN_CONTEXT, Math.floor(model.maxPositionEmbeddings) || MIN_CONTEXT);
-}
-
 /**
  * A config another tab (currently just the Planner, #24/#25) can hand to the Calculator via
  * `openInCalculator` in App.tsx. Each field replaces that whole slice of state, same as loading
@@ -76,10 +74,7 @@ export type Action =
   | { type: 'restore'; state: CalcState };
 
 function clampWorkload(w: Workload, model: ModelSpec): Workload {
-  return {
-    contextTokens: Math.round(clamp(w.contextTokens, MIN_CONTEXT, maxContextFor(model))),
-    concurrentUsers: Math.round(clamp(w.concurrentUsers, 1, MAX_USERS)),
-  };
+  return clampWorkloadFor(model, w);
 }
 
 export function reducer(state: CalcState, action: Action): CalcState {
