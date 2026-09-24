@@ -26,9 +26,9 @@ export function SpeculativeFields({ speculative, onChange }: Props) {
   };
 
   return (
-    <section className="panel">
-      <details className="disclosure">
-        <summary>Speculative decoding</summary>
+    <details className="card collapsible">
+      <summary>Speculative decoding</summary>
+      <div className="collapsible-body">
         <label className="check">
           <input type="checkbox" checked={speculative.enabled} onChange={(e) => onChange({ enabled: e.target.checked })} />
           Enable
@@ -116,7 +116,7 @@ export function SpeculativeFields({ speculative, onChange }: Props) {
             </div>
           </>
         )}
-      </details>
-    </section>
+      </div>
+    </details>
   );
 }

@@ -32,7 +32,7 @@ function setup(overrides: Partial<Parameters<typeof RepoSearch>[0]> = {}) {
   const onSelectHub = vi.fn();
   render(
     <RepoSearch
-      value=""
+      loadedId=""
       presets={PRESETS}
       fetching={false}
       onSubmit={onSubmit}
@@ -198,13 +198,29 @@ describe('RepoSearch', () => {
     expect(onSelectPreset).toHaveBeenCalledWith(PRESETS[0]);
   });
 
-  it('an external value change (a preset load) resets the field and closes the list', () => {
+  it('starts empty with a placeholder, even when a model is already loaded (#28)', () => {
+    render(
+      <RepoSearch
+        loadedId="meta-llama/Llama-3.3-70B-Instruct"
+        presets={PRESETS}
+        fetching={false}
+        onSubmit={vi.fn()}
+        onSelectPreset={vi.fn()}
+        onSelectHub={vi.fn()}
+      />,
+    );
+    const input = screen.getByLabelText('Hugging Face repo id');
+    expect(input).toHaveValue('');
+    expect(input).toHaveAttribute('placeholder', expect.stringMatching(/Search or paste a repo id/));
+  });
+
+  it('an external load (a new loaded id) clears the field and closes the list', () => {
     const onSubmit = vi.fn();
     const onSelectPreset = vi.fn();
     const onSelectHub = vi.fn();
     const { rerender } = render(
       <RepoSearch
-        value=""
+        loadedId=""
         presets={PRESETS}
         fetching={false}
         onSubmit={onSubmit}
@@ -218,7 +234,7 @@ describe('RepoSearch', () => {
 
     rerender(
       <RepoSearch
-        value="meta-llama/Llama-3.1-8B-Instruct"
+        loadedId="meta-llama/Llama-3.1-8B-Instruct"
         presets={PRESETS}
         fetching={false}
         onSubmit={onSubmit}
@@ -226,7 +242,25 @@ describe('RepoSearch', () => {
         onSelectHub={onSelectHub}
       />,
     );
-    expect(input).toHaveValue('meta-llama/Llama-3.1-8B-Instruct');
+    expect(input).toHaveValue('');
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+  });
+
+  it('re-loading the id that is already loaded still clears the field (loadSeq bump)', () => {
+    const props = {
+      loadedId: 'meta-llama/Llama-3.1-8B-Instruct',
+      presets: PRESETS,
+      fetching: false,
+      onSubmit: vi.fn(),
+      onSelectPreset: vi.fn(),
+      onSelectHub: vi.fn(),
+    };
+    const { rerender } = render(<RepoSearch {...props} loadSeq={1} />);
+    const input = screen.getByLabelText('Hugging Face repo id');
+    fireEvent.change(input, { target: { value: 'Llama-3.1-8B' } });
+    expect(input).toHaveValue('Llama-3.1-8B');
+
+    rerender(<RepoSearch {...props} loadSeq={2} />);
+    expect(input).toHaveValue('');
   });
 });

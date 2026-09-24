@@ -105,6 +105,81 @@ export function Results({ state, result, onApplyFit, getLink }: Props) {
         )}
       </section>
 
+      <div className="cards cards-2">
+        <div className="card callout">
+          <h3>Max users at {formatTokens(C)}</h3>
+          <p className="big num">{users(result.maxUsersAtContext)}</p>
+          <p className="muted">
+            {fixedTooBig
+              ? `${offloadEnabled ? 'weights that do not fit in system RAM' : 'weights'} + overhead${result.speculative.memory.weightBytes > 0 ? ' + draft weights' : ''} alone exceed usable VRAM`
+              : 'concurrent requests, each at full context'}
+          </p>
+        </div>
+        <div className="card callout">
+          <h3>
+            Max context for {formatNumber(N)} user{N === 1 ? '' : 's'}
+          </h3>
+          <p className="big num">{formatTokens(result.maxContextForUsers)}</p>
+          <p className="muted">
+            {formatNumber(result.maxContextForUsers)} tokens (full-attention rate, capped at the model max)
+          </p>
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>Decode throughput</h3>
+        <div className="tput">
+          <div>
+            <p className="big num">{tokS(result.throughput.perUserTokS)}</p>
+            <p className="muted">tok/s per user</p>
+          </div>
+          <div>
+            <p className="big num">{tokS(result.throughput.aggregateTokS)}</p>
+            <p className="muted">tok/s aggregate</p>
+          </div>
+          <div>
+            <p className="big num">{formatSeconds(result.prefill.ttftSeconds)}</p>
+            <p className="muted">time to first token (1 user)</p>
+          </div>
+        </div>
+        <p className="help">
+          bandwidth-bound decode estimate, ×{formatNumber(result.throughput.efficiency, 3)} efficiency
+          {hardware.gpuCount > 1 && ' (includes an estimated tensor-parallel communication penalty; see Show the math)'}
+          {offloaded && ' (includes the CPU/RAM-offloaded layers; see Show the math)'}
+        </p>
+        <p className="help">
+          TTFT is a compute-bound estimate, BF16 rate, ×{result.prefill.mfu} MFU
+          {result.prefill.headsSource === 'hiddenSize-fallback' ? '; head count unknown, hiddenSize used in its place' : ''}
+        </p>
+      </div>
+
+      {result.speculative.enabled && (
+        <div className="card">
+          <h3>Decode throughput (speculative)</h3>
+          <div className="tput">
+            <div>
+              <p className="big num">{tokS(result.speculative.throughput.perUserTokS)}</p>
+              <p className="muted">tok/s per user</p>
+            </div>
+            <div>
+              <p className="big num">{tokS(result.speculative.throughput.aggregateTokS)}</p>
+              <p className="muted">tok/s aggregate</p>
+            </div>
+          </div>
+          <p className="help">
+            ×{formatNumber(result.speculative.throughput.multiplier, 2)} vs no speculation ·{' '}
+            {formatNumber(result.speculative.throughput.expectedTokensPerStep, 2)} expected tokens/verify step. Helps most at low
+            concurrency — KV-cache reads dominate both models' steps as concurrent users grow, shrinking the gain.
+          </p>
+          {result.speculative.memory.totalBytes > 0 && (
+            <p className="muted">
+              Draft model adds <Bytes value={result.speculative.memory.totalBytes} /> to VRAM (
+              <Bytes value={result.speculative.memory.weightBytes} /> weights + <Bytes value={result.speculative.memory.kvBytesAllUsers} /> KV).
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="cards">
         <div className="card stat">
           <h3>KV per token</h3>
@@ -147,26 +222,8 @@ export function Results({ state, result, onApplyFit, getLink }: Props) {
         </div>
       </div>
 
-      <div className="cards cards-2">
-        <div className="card callout">
-          <h3>Max users at {formatTokens(C)}</h3>
-          <p className="big num">{users(result.maxUsersAtContext)}</p>
-          <p className="muted">
-            {fixedTooBig
-              ? `${offloadEnabled ? 'weights that do not fit in system RAM' : 'weights'} + overhead${result.speculative.memory.weightBytes > 0 ? ' + draft weights' : ''} alone exceed usable VRAM`
-              : 'concurrent requests, each at full context'}
-          </p>
-        </div>
-        <div className="card callout">
-          <h3>
-            Max context for {formatNumber(N)} user{N === 1 ? '' : 's'}
-          </h3>
-          <p className="big num">{formatTokens(result.maxContextForUsers)}</p>
-          <p className="muted">
-            {formatNumber(result.maxContextForUsers)} tokens (full-attention rate, capped at the model max)
-          </p>
-        </div>
-      </div>
+      <Chart result={result} users={N} />
+      <CostCard state={state} result={result} />
 
       <div className="card">
         <h3>Context table</h3>
@@ -206,62 +263,6 @@ export function Results({ state, result, onApplyFit, getLink }: Props) {
 
       <FitMatrix state={state} onApply={onApplyFit} />
 
-      <div className="card">
-        <h3>Decode throughput</h3>
-        <div className="tput">
-          <div>
-            <p className="big num">{tokS(result.throughput.perUserTokS)}</p>
-            <p className="muted">tok/s per user</p>
-          </div>
-          <div>
-            <p className="big num">{tokS(result.throughput.aggregateTokS)}</p>
-            <p className="muted">tok/s aggregate</p>
-          </div>
-          <div>
-            <p className="big num">{formatSeconds(result.prefill.ttftSeconds)}</p>
-            <p className="muted">time to first token (1 user)</p>
-          </div>
-        </div>
-        <p className="help">
-          bandwidth-bound decode estimate, ×{formatNumber(result.throughput.efficiency, 3)} efficiency
-          {hardware.gpuCount > 1 && ' (includes an estimated tensor-parallel communication penalty; see Show the math)'}
-          {offloaded && ' (includes the CPU/RAM-offloaded layers; see Show the math)'}
-        </p>
-        <p className="help">
-          TTFT is a compute-bound estimate, BF16 rate, ×{result.prefill.mfu} MFU
-          {result.prefill.headsSource === 'hiddenSize-fallback' ? '; head count unknown, hiddenSize used in its place' : ''}
-        </p>
-      </div>
-
-      <CostCard state={state} result={result} />
-      {result.speculative.enabled && (
-        <div className="card">
-          <h3>Decode throughput (speculative)</h3>
-          <div className="tput">
-            <div>
-              <p className="big num">{tokS(result.speculative.throughput.perUserTokS)}</p>
-              <p className="muted">tok/s per user</p>
-            </div>
-            <div>
-              <p className="big num">{tokS(result.speculative.throughput.aggregateTokS)}</p>
-              <p className="muted">tok/s aggregate</p>
-            </div>
-          </div>
-          <p className="help">
-            ×{formatNumber(result.speculative.throughput.multiplier, 2)} vs no speculation ·{' '}
-            {formatNumber(result.speculative.throughput.expectedTokensPerStep, 2)} expected tokens/verify step. Helps most at low
-            concurrency — KV-cache reads dominate both models' steps as concurrent users grow, shrinking the gain.
-          </p>
-          {result.speculative.memory.totalBytes > 0 && (
-            <p className="muted">
-              Draft model adds <Bytes value={result.speculative.memory.totalBytes} /> to VRAM (
-              <Bytes value={result.speculative.memory.weightBytes} /> weights + <Bytes value={result.speculative.memory.kvBytesAllUsers} /> KV).
-            </p>
-          )}
-        </div>
-      )}
-
-      <Chart result={result} users={N} />
       <LaunchCommand state={state} />
       <ShowTheMath state={state} result={result} />
       <ExportBar state={state} result={result} getLink={getLink} />

@@ -248,20 +248,22 @@ export default function App() {
       <Header getLink={getLink} compareOn={compareOn} onToggleCompare={toggleCompare} />
       <TabBar active={tab} onChange={setTab} />
       <div id="tabpanel-calculator" role="tabpanel" aria-labelledby="tab-calculator" hidden={tab !== 'calculator'}>
-        {showUndo && undoTab === 'calculator' && undoState && (
-          <div className="undo-notice" role="status">
-            <span className="muted">Cleared · </span>
-            <button className="link-btn" onClick={undoCalculatorClear}>
-              Undo
-            </button>
-          </div>
-        )}
+        {/* The toolbar sits outside `.layout` on purpose: as a grid item it took column 1 and
+            pushed the inputs/results into the wrong cells (#28). */}
+        <div className="toolbar">
+          {showUndo && undoTab === 'calculator' && undoState && (
+            <div className="undo-notice" role="status">
+              <span className="muted">Cleared · </span>
+              <button className="link-btn" onClick={undoCalculatorClear}>
+                Undo
+              </button>
+            </div>
+          )}
+          <button className="btn toolbar-end" onClick={clearCalculator} aria-label="Clear calculator">
+            Clear
+          </button>
+        </div>
         <main className="layout">
-          <div className="calculator-toolbar">
-            <button className="btn" onClick={clearCalculator} aria-label="Clear calculator">
-              Clear
-            </button>
-          </div>
           <div className="inputs">
             {/* Keyed by column: the GGUF picker, fetch status and search text are per-column local
                 state, so switching columns must remount rather than carry B's picker over to A. */}
@@ -279,12 +281,12 @@ export default function App() {
               onChange={(patch) => activeDispatch({ type: 'hardware', patch })}
               onRuntimeChange={(runtime) => activeDispatch({ type: 'runtime', runtime })}
             />
-            <HardwareFinder state={activeState} onApply={(patch) => activeDispatch({ type: 'hardware', patch })} />
             <WorkloadPanel
               workload={activeState.workload}
               maxContext={maxContextFor(activeState.model)}
               onChange={(patch) => activeDispatch({ type: 'workload', patch })}
             />
+            <HardwareFinder state={activeState} onApply={(patch) => activeDispatch({ type: 'hardware', patch })} />
             <SpeculativeFields
               speculative={activeState.speculative ?? DISABLED_SPECULATIVE}
               onChange={(patch) => activeDispatch({ type: 'speculative', patch })}

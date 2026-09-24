@@ -29,6 +29,13 @@ function modelRowName(name: string): RegExp {
   return new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
 }
 
+/** The Model card's "Loaded: <name>" line (#28): the repo id field is a search box and starts empty. */
+function loadedLine(): HTMLElement {
+  const el = screen.getByText('Loaded:').parentElement;
+  if (!el) throw new Error('loaded line not rendered');
+  return el;
+}
+
 /** Opens a provider's model list and clicks the named model, mirroring what the old flat preset chip did. */
 async function pickProviderModel(user: ReturnType<typeof userEvent.setup>, provider: string, modelName: string) {
   await user.click(screen.getByRole('button', { name: provider }));
@@ -55,6 +62,30 @@ describe('App', () => {
     expect(screen.getAllByText('328 KB').length).toBeGreaterThan(0);
     expect(screen.getAllByText('320 KiB').length).toBeGreaterThan(0);
     expect(screen.getByText('· built-in preset')).toBeInTheDocument();
+  });
+
+  it('a fresh load leaves the repo id field empty with a placeholder, and names the loaded model (#28)', () => {
+    render(<App />);
+    const input = screen.getByLabelText('Hugging Face repo id');
+    expect(input).toHaveValue('');
+    expect(input).toHaveAttribute('placeholder', expect.stringMatching(/Search or paste a repo id/));
+    expect(loadedLine()).toHaveTextContent(`Loaded: ${defaultState.model.name}`);
+  });
+
+  it('a shared link carrying a model names that model on the Loaded line, with the field still empty (#28)', () => {
+    const qwen = { ...defaultState, model: { ...DEFAULT_MODEL_PRESET, id: 'Qwen/Qwen3-8B', name: 'Qwen3 8B (linked)' } };
+    window.history.replaceState(null, '', `/?${encodeState(qwen)}`);
+    render(<App />);
+    expect(screen.getByLabelText('Hugging Face repo id')).toHaveValue('');
+    expect(loadedLine()).toHaveTextContent('Loaded: Qwen3 8B (linked)');
+  });
+
+  it('picking a provider model updates the Loaded line and leaves the field empty (#28)', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await pickProviderModel(user, 'Meta', 'Llama 3.1 8B');
+    expect(loadedLine()).toHaveTextContent('Loaded: Llama 3.1 8B');
+    expect(screen.getByLabelText('Hugging Face repo id')).toHaveValue('');
   });
 
   it('switching to the Llama 3.1 8B model changes the KV per token figure', async () => {
@@ -199,6 +230,8 @@ describe('App', () => {
       release();
     });
     expect(await within(panel).findByText(/gated or private/)).toBeInTheDocument();
+    // The Loaded line stays up beside the error, naming the model the results still describe.
+    expect(within(panel).getByRole('status')).toHaveTextContent(/Loaded: Llama 3.3 70B/);
     // The calculator keeps its last good spec.
     expect(screen.getAllByText('328 KB').length).toBeGreaterThan(0);
 
@@ -397,7 +430,7 @@ describe('App', () => {
     // Back to A: A never loaded a GGUF repo, so there must be no picker (which would load B's repo into A).
     await user.click(screen.getByRole('button', { name: 'A' }));
     expect(screen.queryByLabelText('GGUF file')).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Hugging Face repo id')).toHaveValue('meta-llama/Llama-3.3-70B-Instruct');
+    expect(loadedLine()).toHaveTextContent('Loaded: Llama 3.3 70B');
     expect(screen.getByLabelText('Weights')).toHaveValue('bf16');
   });
 

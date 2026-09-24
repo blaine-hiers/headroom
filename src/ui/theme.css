@@ -128,19 +128,43 @@ input[type='number'] {
   gap: var(--gutter);
 }
 
-@media (min-width: 800px) {
-  .layout {
-    grid-template-columns: 380px minmax(0, 1fr);
-    align-items: start;
-  }
-}
-
+/* Every grid track below is minmax(0, 1fr), not the default auto: an auto track grows to its
+   content's min-content width, so one wide table (Planner, fit matrix) widened the whole page
+   instead of scrolling inside its own .table-wrap (#28). */
 .inputs,
 .results,
 .results-stack {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--gutter);
   min-width: 0;
+}
+
+@media (min-width: 800px) {
+  .layout {
+    grid-template-columns: 360px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  /* Inputs stay in view while the (longer) results column scrolls; the column scrolls on its
+     own once it is taller than the viewport, so nothing is ever out of reach. */
+  .inputs {
+    position: sticky;
+    top: var(--gutter);
+    max-height: calc(100vh - 2 * var(--gutter));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    /* room for focus outlines, which overflow: auto would otherwise clip */
+    padding: 3px;
+    margin: -3px;
+  }
+}
+
+@media (min-width: 1100px) {
+  .layout {
+    grid-template-columns: 400px minmax(0, 1fr);
+  }
 }
 
 /* ---------- header ---------- */
@@ -222,27 +246,70 @@ input[type='number'] {
   border-bottom-color: var(--accent);
 }
 
-/* ---------- calculator toolbar ---------- */
+/* ---------- tab toolbar (Clear / Undo) ---------- */
 
-.calculator-toolbar {
+/* A row of its own above each tab's content, never a grid item of .layout (#28). */
+.toolbar {
   display: flex;
-  justify-content: flex-end;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
-  padding: 8px 0;
+  margin-bottom: var(--gutter);
+}
+
+.toolbar-end {
+  margin-left: auto;
 }
 
 /* ---------- planner ---------- */
 
 .planner {
   display: grid;
-  gap: var(--gutter);
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 1100px;
+  margin: 0 auto;
 }
 
-.planner-toolbar {
+.planner > .panel + .panel {
+  margin-top: var(--gutter);
+}
+
+.panel.step h2 {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text);
+}
+
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* Compact wrapping grid of controls: as many ~190px columns as fit, down to one on a phone. */
+.controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 190px), 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.controls-check {
+  align-self: end;
   min-height: 34px;
+  margin-top: 0;
 }
 
 /* ---------- undo notice ---------- */
@@ -251,8 +318,7 @@ input[type='number'] {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 16px;
-  margin-bottom: 8px;
+  padding: 6px 12px;
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -323,6 +389,7 @@ input[type='number'] {
 
 .panel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -353,6 +420,12 @@ input[type='number'] {
   display: flex;
   justify-content: space-between;
   gap: 8px;
+}
+
+/* A checkbox label inside a .field keeps its box next to its text. */
+.field label.check {
+  justify-content: flex-start;
+  align-items: center;
 }
 
 input[type='text'],
@@ -666,24 +739,59 @@ input[type='range'] {
   color: var(--bad);
 }
 
+.status-line {
+  display: block;
+}
+
 .status-fetching {
   color: var(--muted);
 }
 
-.disclosure {
+.disclosure,
+.panel-details {
   border-top: 1px solid var(--border);
   padding-top: 10px;
 }
 
-.disclosure summary {
+.disclosure summary,
+.panel-details summary {
   cursor: pointer;
   font-size: 13px;
   color: var(--muted);
   margin-bottom: 4px;
 }
 
-.disclosure[open] summary {
+.disclosure[open] summary,
+.panel-details[open] summary {
   margin-bottom: 10px;
+}
+
+/* Collapsible cards for rarely used inputs (hardware finder, speculative decoding). */
+.collapsible > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.collapsible > summary:hover {
+  color: var(--text);
+}
+
+.collapsible[open] > summary {
+  margin-bottom: 12px;
+}
+
+.collapsible-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.collapsible-body .check {
+  margin-top: 0;
 }
 
 .warnings {
@@ -842,6 +950,11 @@ td {
   text-align: left;
   padding: 7px 8px;
   border-bottom: 1px solid var(--border);
+}
+
+/* Numbers never break mid-value ("1.15 / s"); a table too wide for its card scrolls in .table-wrap. */
+td.num {
+  white-space: nowrap;
 }
 
 th {

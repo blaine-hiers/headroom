@@ -8,9 +8,13 @@ const MAX_PRESET_MATCHES = 5;
 type SearchItem = { kind: 'preset'; spec: ModelSpec } | { kind: 'hub'; hit: HubSearchHit };
 
 interface Props {
-  /** The currently loaded model's id: an external change (preset pick, a successful fetch)
-   * resets the field to it. Typing does not feed back through this prop. */
-  value: string;
+  /** The currently loaded model's id. The field is a search box, not a display of the loaded
+   * model (ModelPanel's "Loaded:" line is): it starts empty, and any change to this id (preset
+   * pick, a successful fetch, a Planner hand-off) clears it again. Typing does not feed back
+   * through this prop. */
+  loadedId: string;
+  /** Bumped by ModelPanel on each of its own loads, so re-loading the same id still clears the field. */
+  loadSeq?: number;
   presets: ModelSpec[];
   token?: string;
   fetching: boolean;
@@ -22,17 +26,18 @@ interface Props {
 /**
  * The repo id field: a combobox that fuzzy-matches bundled presets locally (so it works
  * offline) and, ~250ms after typing stops, searches the Hub for matching repos. Selecting
- * an entry (click or Enter) fills the field and runs the same fetch path as typing an id
- * and pressing Enter.
+ * an entry (click or Enter) runs the same fetch path as typing an id and pressing Enter.
  */
-export function RepoSearch({ value, presets, token, fetching, onSubmit, onSelectPreset, onSelectHub }: Props) {
+export function RepoSearch({ loadedId, loadSeq, presets, token, fetching, onSubmit, onSelectPreset, onSelectHub }: Props) {
   const inputId = useId();
   const listId = useId();
-  const [query, setQuery] = useState(value);
+  const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [hubHits, setHubHits] = useState<HubSearchHit[]>([]);
-  const [prevValue, setPrevValue] = useState(value);
+  const loadKey = `${loadedId}
+${loadSeq ?? 0}`;
+  const [prevLoadKey, setPrevLoadKey] = useState(loadKey);
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const seqRef = useRef(0);
 
@@ -41,13 +46,13 @@ export function RepoSearch({ value, presets, token, fetching, onSubmit, onSelect
     seqRef.current++; // invalidates any in-flight response, even one already in flight
   };
 
-  // An external load (preset pick, successful fetch) resets the field; the user's own typing
-  // never comes back through `value`, so this never fires mid-keystroke. Adjusted during
+  // An external load (preset pick, successful fetch) clears the field; the user's own typing
+  // never comes back through `loadedId`, so this never fires mid-keystroke. Adjusted during
   // render (React's documented pattern for this) rather than in an effect, so it takes
   // effect in the same commit instead of triggering an extra render.
-  if (value !== prevValue) {
-    setPrevValue(value);
-    setQuery(value);
+  if (loadKey !== prevLoadKey) {
+    setPrevLoadKey(loadKey);
+    setQuery('');
     setOpen(false);
     setActiveIndex(-1);
     setHubHits([]);
@@ -59,7 +64,7 @@ export function RepoSearch({ value, presets, token, fetching, onSubmit, onSelect
   useEffect(() => {
     cancelPendingSearch();
     return () => clearTimeout(timerRef.current);
-  }, [value]);
+  }, [loadKey]);
 
   const q = query.trim();
   const presetMatches = q ? presets.filter((p) => fuzzyMatches(q, p.id, p.name)).slice(0, MAX_PRESET_MATCHES) : [];
@@ -145,7 +150,7 @@ export function RepoSearch({ value, presets, token, fetching, onSubmit, onSelect
             aria-controls={listId}
             aria-autocomplete="list"
             aria-activedescendant={activeId}
-            placeholder="org/model"
+            placeholder="Search or paste a repo id, e.g. Qwen/Qwen3-8B"
             spellCheck={false}
             autoComplete="off"
             value={query}
