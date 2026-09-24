@@ -1,4 +1,4 @@
-import { kvBytesForContext } from './kvcache';
+import { kvBytesForContext, kvBytesPerToken } from './kvcache';
 import { decodeThroughput } from './throughput';
 import type { KvQuantKey, SpeculativeConfig, SpeculativeMemory, SpeculativeThroughput } from './types';
 import { activeParamsDetailed, weightBytes } from './weights';
@@ -42,6 +42,23 @@ function draftWeights(cfg: SpeculativeConfig): { fullWeightBytes: number; active
 }
 
 /**
+ * Draft KV cache for one request at `contextTokens`. Only a 'preset' draft (a full ModelSpec)
+ * has a known architecture to estimate this from; 'custom' (params only) and 'none' (n-gram)
+ * are 0. No tensor-parallel KV-head replication factor is applied — the draft reuses the
+ * target's bandwidth/efficiency model rather than a separate TP check for its own head count.
+ */
+export function draftKvBytesPerRequest(cfg: SpeculativeConfig, contextTokens: number, kvQuant: KvQuantKey): number {
+  if (!cfg.enabled) return 0;
+  return cfg.draftMode === 'preset' && cfg.draftModel ? kvBytesForContext(cfg.draftModel, contextTokens, kvQuant) : 0;
+}
+
+/** Draft KV cache per token, full-attention rate (see draftKvBytesPerRequest for the same caveats). */
+export function draftKvBytesPerToken(cfg: SpeculativeConfig, kvQuant: KvQuantKey): number {
+  if (!cfg.enabled) return 0;
+  return cfg.draftMode === 'preset' && cfg.draftModel ? kvBytesPerToken(cfg.draftModel, kvQuant) : 0;
+}
+
+/**
  * Draft model memory: its weights, plus its own KV cache at the same context and user count
  * as the target. A 'custom' (params-only) draft has no known architecture, so only 'preset'
  * (which carries a full ModelSpec) contributes a KV estimate; 'none' (n-gram) costs nothing.
@@ -53,11 +70,11 @@ export function speculativeMemory(
   kvQuant: KvQuantKey,
 ): SpeculativeMemory {
   if (!cfg.enabled) {
-    return { weightBytes: 0, activeWeightBytes: 0, kvBytesPerRequest: 0, kvBytesAllUsers: 0, totalBytes: 0 };
+    return { weightBytes: 0, activeWeightBytes: 0, kvBytesPerRequest: 0, kvBytesAllUsers: 0, kvBytesPerToken: 0, totalBytes: 0 };
   }
   const { fullWeightBytes, activeWeightBytes } = draftWeights(cfg);
-  const kvBytesPerRequest =
-    cfg.draftMode === 'preset' && cfg.draftModel ? kvBytesForContext(cfg.draftModel, contextTokens, kvQuant) : 0;
+  const kvBytesPerRequest = draftKvBytesPerRequest(cfg, contextTokens, kvQuant);
+  const kvPerToken = draftKvBytesPerToken(cfg, kvQuant);
   const users = Math.max(0, Math.floor(concurrentUsers));
   const kvBytesAllUsers = kvBytesPerRequest * users;
   return {
@@ -65,6 +82,7 @@ export function speculativeMemory(
     activeWeightBytes,
     kvBytesPerRequest,
     kvBytesAllUsers,
+    kvBytesPerToken: kvPerToken,
     totalBytes: fullWeightBytes + kvBytesAllUsers,
   };
 }

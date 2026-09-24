@@ -50,7 +50,7 @@ export function Results({ state, result }: Props) {
   const N = workload.concurrentUsers;
   const C = workload.contextTokens;
   const level = fitLevel(result.fits, result.headroomBytes, result.usableBytes);
-  const fixedTooBig = result.weightBytes + result.overheadBytes > result.usableBytes;
+  const fixedTooBig = result.fixedBytes > result.usableBytes;
   const tpWarnings = tensorParallelWarnings(result.tensorParallel, model.numKvHeads);
 
   return (
@@ -125,7 +125,11 @@ export function Results({ state, result }: Props) {
         <div className="card callout">
           <h3>Max users at {formatTokens(C)}</h3>
           <p className="big num">{users(result.maxUsersAtContext)}</p>
-          <p className="muted">{fixedTooBig ? 'weights + overhead alone exceed usable VRAM' : 'concurrent requests, each at full context'}</p>
+          <p className="muted">
+            {fixedTooBig
+              ? `weights + overhead${result.speculative.memory.weightBytes > 0 ? ' + draft weights' : ''} alone exceed usable VRAM`
+              : 'concurrent requests, each at full context'}
+          </p>
         </div>
         <div className="card callout">
           <h3>

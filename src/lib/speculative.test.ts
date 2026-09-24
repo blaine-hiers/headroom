@@ -40,7 +40,7 @@ describe('speculativeMemory', () => {
 
   it('disabled: zero everywhere', () => {
     const m = speculativeMemory(DISABLED_SPECULATIVE, 8192, 4, kv);
-    expect(m).toEqual({ weightBytes: 0, activeWeightBytes: 0, kvBytesPerRequest: 0, kvBytesAllUsers: 0, totalBytes: 0 });
+    expect(m).toEqual({ weightBytes: 0, activeWeightBytes: 0, kvBytesPerRequest: 0, kvBytesAllUsers: 0, kvBytesPerToken: 0, totalBytes: 0 });
   });
 
   it("draftMode 'none' (n-gram) while enabled: still zero memory", () => {
@@ -57,6 +57,8 @@ describe('speculativeMemory', () => {
     expect(m.weightBytes).toBeCloseTo(weightBytes(draft.params, 'q4_k_m'), 0);
     expect(m.kvBytesPerRequest).toBeGreaterThan(0);
     expect(m.kvBytesAllUsers).toBeCloseTo(m.kvBytesPerRequest * 4, 0);
+    expect(m.kvBytesPerToken).toBeGreaterThan(0);
+    expect(m.kvBytesPerRequest).toBeCloseTo(m.kvBytesPerToken * 8192, 0);
     expect(m.totalBytes).toBeCloseTo(m.weightBytes + m.kvBytesAllUsers, 0);
   });
 

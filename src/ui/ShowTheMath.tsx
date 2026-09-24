@@ -77,7 +77,8 @@ export function ShowTheMath({ state, result }: Props) {
   const full = model.numLayers - sliding;
   const C = Math.floor(workload.contextTokens);
   const N = Math.floor(workload.concurrentUsers);
-  const fixed = result.weightBytes + result.overheadBytes;
+  // Includes the draft model's weights when speculation is enabled (see fit.ts's `fixed`).
+  const fixed = result.fixedBytes;
   const active = result.activeParams;
   const method = result.activeParamsMethod;
   const activeBytes = weightBytes(active, quant.weight);
@@ -144,30 +145,60 @@ export function ShowTheMath({ state, result }: Props) {
           sub={`${n(hw.gpuCount)} × ${n(effectiveVram, 2)} × 1e9 × (1 − ${n(hw.reservePct, 2)}/100)`}
           result={B(result.usableBytes)}
         />
-        <Step
-          title="Total VRAM"
-          formula="weights + overheadGB × 1e9 × gpuCount + N × KV per request"
-          sub={
-            <>
-              {formatNumber(result.weightBytes)} + {n(hw.overheadGB, 2)} × 1e9 × {n(hw.gpuCount)} + {n(N)} × {n(result.kvBytesPerRequest)}
-            </>
-          }
-          result={
-            <>
-              {B(result.totalBytes)} ({result.fits ? 'fits' : 'does not fit'} in {formatNumber(result.usableBytes)} B)
-            </>
-          }
-        />
+        {result.speculative.enabled ? (
+          <Step
+            title="Total VRAM"
+            formula="weights + draftWeights + overheadGB × 1e9 × gpuCount + N × (KV per request + draft KV per request)"
+            sub={
+              <>
+                {n(result.weightBytes)} + {n(result.speculative.memory.weightBytes)} + {n(hw.overheadGB, 2)} × 1e9 × {n(hw.gpuCount)} + {n(N)} × (
+                {n(result.kvBytesPerRequest)} + {n(result.speculative.memory.kvBytesPerRequest)})
+              </>
+            }
+            result={
+              <>
+                {B(result.totalBytes)} ({result.fits ? 'fits' : 'does not fit'} in {formatNumber(result.usableBytes)} B)
+              </>
+            }
+          />
+        ) : (
+          <Step
+            title="Total VRAM"
+            formula="weights + overheadGB × 1e9 × gpuCount + N × KV per request"
+            sub={
+              <>
+                {formatNumber(result.weightBytes)} + {n(hw.overheadGB, 2)} × 1e9 × {n(hw.gpuCount)} + {n(N)} × {n(result.kvBytesPerRequest)}
+              </>
+            }
+            result={
+              <>
+                {B(result.totalBytes)} ({result.fits ? 'fits' : 'does not fit'} in {formatNumber(result.usableBytes)} B)
+              </>
+            }
+          />
+        )}
         <Step
           title="Max users at C"
-          formula="floor((usable − fixed) / KV per request)"
-          sub={`floor((${n(result.usableBytes)} − ${n(fixed)}) / ${n(result.kvBytesPerRequest)})`}
+          formula={result.speculative.enabled ? 'floor((usable − fixed) / (KV per request + draft KV per request))' : 'floor((usable − fixed) / KV per request)'}
+          sub={
+            result.speculative.enabled
+              ? `floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(result.kvBytesPerRequest)} + ${n(result.speculative.memory.kvBytesPerRequest)}))`
+              : `floor((${n(result.usableBytes)} − ${n(fixed)}) / ${n(result.kvBytesPerRequest)})`
+          }
           result={Number.isFinite(maxU) ? n(maxU) : '∞'}
         />
         <Step
           title="Max context for N users"
-          formula="min(maxPosition, floor((usable − fixed) / (N × KV per token)))"
-          sub={`min(${n(model.maxPositionEmbeddings)}, floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)})))`}
+          formula={
+            result.speculative.enabled
+              ? 'min(maxPosition, floor((usable − fixed) / (N × (KV per token + draft KV per token))))'
+              : 'min(maxPosition, floor((usable − fixed) / (N × KV per token)))'
+          }
+          sub={
+            result.speculative.enabled
+              ? `min(${n(model.maxPositionEmbeddings)}, floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × (${n(result.kvBytesPerToken)} + ${n(result.speculative.memory.kvBytesPerToken)}))))`
+              : `min(${n(model.maxPositionEmbeddings)}, floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)})))`
+          }
           result={`${n(result.maxContextForUsers)} tokens`}
         />
         <ActiveParamsStep state={state} active={active} method={method} />

@@ -1,5 +1,5 @@
 import { kvBytesForContext, kvBytesPerToken } from './kvcache';
-import { DISABLED_SPECULATIVE, speculativeMemory, speculativeThroughput } from './speculative';
+import { DISABLED_SPECULATIVE, draftKvBytesPerRequest, speculativeMemory, speculativeThroughput } from './speculative';
 import { checkTensorParallelSplit, tensorParallelEfficiency } from './tensorParallel';
 import { DECODE_EFFICIENCY, decodeThroughput } from './throughput';
 import type { CalcResult, CalcState, HardwareSpec } from './types';
@@ -90,7 +90,10 @@ export function calculate(state: CalcState): CalcResult {
   const spec = state.speculative ?? DISABLED_SPECULATIVE;
   const draftMemory = speculativeMemory(spec, ctx, users, quant.kv);
   const fixed = weights + overhead + draftMemory.weightBytes;
-  const total = fixed + allUsers + draftMemory.kvBytesAllUsers;
+  // Per-user rate at the chosen context: target KV per request + the draft's own KV per
+  // request. Used for total/fits, maxUsersAtContext, and the chart, so all three agree.
+  const bytesPerUser = perRequest + draftMemory.kvBytesPerRequest;
+  const total = fixed + users * bytesPerUser;
 
   const contexts = new Set<number>(TABLE_CONTEXTS);
   contexts.add(ctx);
@@ -98,8 +101,15 @@ export function calculate(state: CalcState): CalcResult {
     .sort((a, b) => a - b)
     .map((c) => {
       const kvReq = kvBytesForContext(model, c, quant.kv) * kvReplication;
-      return { contextTokens: c, kvBytesPerRequest: kvReq, maxUsers: maxUsers(usable, fixed, kvReq) };
+      // maxUsers at this row's context must include the draft's KV at that same context, or
+      // it silently understates the true cost per user (the draft rides along at every context).
+      const combinedKvReq = kvReq + draftKvBytesPerRequest(spec, c, quant.kv);
+      return { contextTokens: c, kvBytesPerRequest: kvReq, maxUsers: maxUsers(usable, fixed, combinedKvReq) };
     });
+
+  // Combined per-token rate (full-attention, conservative) for maxContextForUsers: the
+  // draft's own KV rides along at every context, same as its per-request KV does above.
+  const bytesPerTokenFull = perToken + draftMemory.kvBytesPerToken;
 
   // Recomputed from the spec (not model.activeParams) so a manual edit stays consistent.
   const active = activeParamsDetailed(model);
@@ -133,11 +143,13 @@ export function calculate(state: CalcState): CalcResult {
     activeParamsMethod: active.method,
     overheadBytes: overhead,
     usableBytes: usable,
+    fixedBytes: fixed,
+    bytesPerUser,
     totalBytes: total,
     headroomBytes: usable - total,
     fits: total <= usable,
-    maxUsersAtContext: maxUsers(usable, fixed, perRequest),
-    maxContextForUsers: maxContext(usable, fixed, users, perToken, model.maxPositionEmbeddings),
+    maxUsersAtContext: maxUsers(usable, fixed, bytesPerUser),
+    maxContextForUsers: maxContext(usable, fixed, users, bytesPerTokenFull, model.maxPositionEmbeddings),
     contextTable,
     throughput,
     tensorParallel,

@@ -127,6 +127,8 @@ export interface SpeculativeMemory {
   /** Draft KV cache for one request at the target's context; 0 unless draftMode 'preset'. */
   kvBytesPerRequest: number;
   kvBytesAllUsers: number;
+  /** Draft KV cache per token, full-attention rate; 0 unless draftMode 'preset'. Feeds maxContextForUsers. */
+  kvBytesPerToken: number;
   totalBytes: number;
 }
 
@@ -211,6 +213,16 @@ export interface CalcResult {
   activeParamsMethod: ActiveParamsMethod;
   overheadBytes: number;
   usableBytes: number;
+  /**
+   * Everything that doesn't scale with users: weights + overhead + the draft model's weights
+   * (0 when speculation is off). Equals `fixed` in fit.ts; what Chart.tsx's line starts from.
+   */
+  fixedBytes: number;
+  /**
+   * Everything that scales per user at the chosen context: target KV per request + the
+   * draft's KV per request (0 when speculation is off). Chart.tsx's line slope.
+   */
+  bytesPerUser: number;
   totalBytes: number;
   headroomBytes: number; // usable - total (negative when it does not fit)
   fits: boolean;
