@@ -4,6 +4,7 @@ import { deriveWarnings } from '../hf';
 import { activeParamsDetailed } from '../weights';
 import { CUSTOM_GPU_NAME, GPU_PRESETS, findGpuPreset } from './gpus';
 import { MODEL_PRESETS, findModelPreset } from './models';
+import { MODEL_CATALOG, PROVIDERS, TASK_TAGS, catalogByProvider, findCatalogEntry } from './catalog';
 
 describe('GPU presets', () => {
   it('has the required entries with the right numbers', () => {
@@ -108,5 +109,55 @@ describe('model presets', () => {
     const m = findModelPreset('Llama 3.3 70B');
     if (!m) throw new Error('missing');
     expect(kvBytesForContext(m, 131072, 'fp16')).toBe(40 * 1024 ** 3);
+  });
+});
+
+describe('model catalog', () => {
+  const providerIds = new Set(PROVIDERS.map((p) => p.id));
+
+  it('MODEL_PRESETS is the flat view of MODEL_CATALOG', () => {
+    expect(MODEL_PRESETS).toEqual(MODEL_CATALOG.map((e) => e.spec));
+  });
+
+  it('every entry passes the same sanity checks as a preset', () => {
+    expect(new Set(MODEL_CATALOG.map((e) => e.spec.id)).size).toBe(MODEL_CATALOG.length);
+    for (const { spec: m } of MODEL_CATALOG) {
+      expect(m.source, m.name).toBe('preset');
+      expect(m.id, m.name).toMatch(/^[\w.-]+\/[\w.-]+$/);
+      expect(m.activeParams, m.name).toBe(activeParamsDetailed(m).active);
+      expect(m.ffn, m.name).toBeDefined();
+      expect(m.warnings.slice(0, deriveWarnings(m).length)).toEqual(deriveWarnings(m));
+      expect(Number.isFinite(kvBytesPerToken(m, 'fp16')), m.name).toBe(true);
+      expect(kvBytesPerToken(m, 'fp16'), m.name).toBeGreaterThan(0);
+    }
+  });
+
+  it('every entry has catalog metadata: a known provider, at least one task tag, a license and a release date', () => {
+    for (const { spec, meta } of MODEL_CATALOG) {
+      expect(providerIds.has(meta.provider), spec.name).toBe(true);
+      expect(meta.family.length, spec.name).toBeGreaterThan(0);
+      expect(meta.tags.length, spec.name).toBeGreaterThan(0);
+      for (const tag of meta.tags) {
+        expect(TASK_TAGS as readonly string[], spec.name).toContain(tag);
+      }
+      expect(meta.license.length, spec.name).toBeGreaterThan(0);
+      expect(meta.releaseDate, spec.name).toMatch(/^\d{4}-\d{2}$/);
+    }
+  });
+
+  it('covers every listed provider with at least one model', () => {
+    for (const p of PROVIDERS) {
+      expect(catalogByProvider(p.id).length, p.id).toBeGreaterThan(0);
+    }
+  });
+
+  it('catalogByProvider filters correctly and findCatalogEntry resolves by id and name', () => {
+    const qwen = catalogByProvider('qwen');
+    expect(qwen.length).toBeGreaterThan(0);
+    for (const e of qwen) expect(e.meta.provider).toBe('qwen');
+
+    expect(findCatalogEntry('Qwen/Qwen3-32B')?.meta.provider).toBe('qwen');
+    expect(findCatalogEntry('Qwen3-32B')?.meta.provider).toBe('qwen');
+    expect(findCatalogEntry('nope')).toBeUndefined();
   });
 });

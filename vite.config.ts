@@ -68,6 +68,8 @@ export default defineConfig({
           include: ['src/**/*.test.tsx'],
           environment: 'jsdom',
           setupFiles: ['src/ui/test-setup.ts'],
+          // Full-App renders in jsdom run 1-5 s each; the 5 s default flakes on slower CI runners.
+          testTimeout: 20_000,
         },
       },
     ],

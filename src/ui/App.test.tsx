@@ -1,7 +1,7 @@
-import { act, render, screen, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { encodeState } from '../lib';
+import { DEFAULT_MODEL_PRESET, encodeState, formatBytes, formatNumber, formatTokens, sizeHardware } from '../lib';
 import type { CalcState } from '../lib';
 import qwenApi from '../lib/__fixtures__/qwen2.5-7b-instruct.api.json';
 import qwenConfig from '../lib/__fixtures__/qwen2.5-7b-instruct.json';
@@ -18,6 +18,21 @@ function badge(): HTMLElement {
   const el = document.querySelector<HTMLElement>('.badge');
   if (!el) throw new Error('fit badge not rendered');
   return el;
+}
+
+/**
+ * Model rows carry meta text (params, context, tags) right after their name with no separating
+ * space, so match by prefix only (a trailing \b would require a non-word char there, which a
+ * name ending in a digit followed by "8.03B params…" never has).
+ */
+function modelRowName(name: string): RegExp {
+  return new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
+}
+
+/** Opens a provider's model list and clicks the named model, mirroring what the old flat preset chip did. */
+async function pickProviderModel(user: ReturnType<typeof userEvent.setup>, provider: string, modelName: string) {
+  await user.click(screen.getByRole('button', { name: provider }));
+  await user.click(screen.getByRole('button', { name: modelRowName(modelName) }));
 }
 
 beforeEach(() => {
@@ -42,10 +57,10 @@ describe('App', () => {
     expect(screen.getByText('· built-in preset')).toBeInTheDocument();
   });
 
-  it('switching to the Llama 3.1 8B chip changes the KV per token figure', async () => {
+  it('switching to the Llama 3.1 8B model changes the KV per token figure', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('button', { name: 'Llama 3.1 8B' }));
+    await pickProviderModel(user, 'Meta', 'Llama 3.1 8B');
     // 2 × 32 × 8 × 128 × 2 = 131,072 B
     expect(screen.getAllByText('131 KB').length).toBeGreaterThan(0);
     expect(screen.getAllByText('128 KiB').length).toBeGreaterThan(0);
@@ -221,7 +236,7 @@ describe('App', () => {
   it('the context slider sits on its top stop at a non-power-of-two model max', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('button', { name: 'Qwen3-32B' })); // max 40960
+    await pickProviderModel(user, 'Qwen', 'Qwen3-32B'); // max 40960
     const ctx = screen.getByLabelText('Context tokens', { exact: true });
     await user.clear(ctx);
     await user.type(ctx, '40960');
@@ -232,7 +247,7 @@ describe('App', () => {
   it('context-table rows above the model max are greyed and tagged, but still shown', async () => {
     const user = userEvent.setup();
     render(<App />);
-    await user.click(screen.getByRole('button', { name: 'Qwen3-32B' })); // max 40960
+    await pickProviderModel(user, 'Qwen', 'Qwen3-32B'); // max 40960
     const rows = screen.getAllByRole('row').filter((r) => r.classList.contains('over-max'));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent('128K');
@@ -245,7 +260,7 @@ describe('App', () => {
     const user = userEvent.setup();
     render(<App />);
     expect(screen.getByText(/70\.55B active per token \(dense, all params\)/)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Qwen3-30B-A3B' }));
+    await pickProviderModel(user, 'Qwen', 'Qwen3-30B-A3B');
     expect(screen.getByText(/3\.04B active per token \(MoE, structural estimate\)/)).toBeInTheDocument();
   });
 
@@ -282,7 +297,7 @@ describe('App', () => {
     expect(storedRecents[0].id).toBe('Qwen/Qwen2.5-7B-Instruct');
 
     // Switch to a different model (Llama 3.1 8B preset)
-    await user.click(screen.getByRole('button', { name: 'Llama 3.1 8B' }));
+    await pickProviderModel(user, 'Meta', 'Llama 3.1 8B');
     expect(screen.getByText('· built-in preset')).toBeInTheDocument();
 
     // Reset the fetch mock call count
@@ -483,5 +498,201 @@ describe('App', () => {
       expect(screen.getByLabelText('Hugging Face token')).toHaveValue('');
       getItem.mockRestore();
     });
+  });
+});
+
+describe('Tabs (#21)', () => {
+  it('opens on the Calculator by default, with the tab bar\'s ARIA wired up', () => {
+    render(<App />);
+    const calcTab = screen.getByRole('tab', { name: 'Calculator' });
+    const plannerTab = screen.getByRole('tab', { name: 'Planner' });
+    expect(calcTab).toHaveAttribute('aria-selected', 'true');
+    expect(plannerTab).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', calcTab.id);
+    expect(screen.getByRole('heading', { level: 1, name: 'Headroom' })).toBeInTheDocument();
+  });
+
+  it('clicking the Planner tab switches panels and updates the URL', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: 'Planner' }));
+    expect(screen.getByRole('tab', { name: 'Planner' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Which model for this task?')).toBeInTheDocument();
+    expect(screen.getByText('What hardware to serve N users?')).toBeInTheDocument();
+    await waitFor(() => expect(window.location.search).toContain('tab=planner'));
+
+    await user.click(screen.getByRole('tab', { name: 'Calculator' }));
+    expect(screen.getByRole('tab', { name: 'Calculator' })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(window.location.search).not.toContain('tab='));
+  });
+
+  it('arrow keys move focus and selection between tabs; Home/End jump to the ends', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const calcTab = screen.getByRole('tab', { name: 'Calculator' });
+    const plannerTab = screen.getByRole('tab', { name: 'Planner' });
+    calcTab.focus();
+
+    await user.keyboard('{ArrowRight}');
+    expect(plannerTab).toHaveFocus();
+    expect(plannerTab).toHaveAttribute('aria-selected', 'true');
+
+    await user.keyboard('{ArrowLeft}');
+    expect(calcTab).toHaveFocus();
+    expect(calcTab).toHaveAttribute('aria-selected', 'true');
+
+    await user.keyboard('{End}');
+    expect(plannerTab).toHaveFocus();
+    await user.keyboard('{Home}');
+    expect(calcTab).toHaveFocus();
+  });
+
+  it('?tab=planner opens directly on the Planner', () => {
+    window.history.replaceState(null, '', '/?tab=planner');
+    render(<App />);
+    expect(screen.getByRole('tab', { name: 'Planner' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Which model for this task?')).toBeInTheDocument();
+  });
+
+  it('an old link with no tab key opens the Calculator unchanged', () => {
+    const s = { ...defaultState, workload: { contextTokens: 32768, concurrentUsers: 4 } };
+    window.history.replaceState(null, '', `/?${encodeState(s)}`);
+    render(<App />);
+    expect(screen.getByRole('tab', { name: 'Calculator' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('Concurrent users')).toHaveValue(4);
+  });
+
+  it('Calculator state survives a round trip through the Planner', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const ctx = screen.getByLabelText('Context tokens', { exact: true });
+    await user.clear(ctx);
+    await user.type(ctx, '32768');
+    await user.tab();
+    expect(ctx).toHaveValue(32768);
+
+    await user.click(screen.getByRole('tab', { name: 'Planner' }));
+    await user.click(screen.getByRole('tab', { name: 'Calculator' }));
+    expect(screen.getByLabelText('Context tokens', { exact: true })).toHaveValue(32768);
+  });
+
+  it('Clear button resets Calculator to defaults and shows Undo notice', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Change some inputs
+    await user.selectOptions(screen.getByLabelText('GPU'), 'H200');
+    await user.clear(screen.getByLabelText('Context tokens', { exact: true }));
+    await user.type(screen.getByLabelText('Context tokens', { exact: true }), '32768');
+    await user.tab();
+
+    // Verify changes are visible
+    expect(screen.getByLabelText('GPU')).toHaveValue('H200');
+    expect(screen.getByLabelText('Context tokens', { exact: true })).toHaveValue(32768);
+
+    // Click Clear
+    await user.click(screen.getByRole('button', { name: 'Clear calculator' }));
+
+    // Verify reset to defaults
+    expect(screen.getByLabelText('GPU')).toHaveValue(defaultState.hardware.gpuName);
+    expect(screen.getByLabelText('Context tokens', { exact: true })).toHaveValue(defaultState.workload.contextTokens);
+
+    // Verify Undo notice appears
+    expect(screen.getByText(/Cleared/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+  });
+
+  it('Undo restores Calculator state and extra columns', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Change inputs
+    await user.selectOptions(screen.getByLabelText('GPU'), 'H200');
+    await user.clear(screen.getByLabelText('Context tokens', { exact: true }));
+    await user.type(screen.getByLabelText('Context tokens', { exact: true }), '16384');
+    await user.tab();
+
+    // Turn on compare mode
+    await user.click(screen.getByRole('button', { name: /compare/i }));
+
+    // Clear
+    await user.click(screen.getByRole('button', { name: 'Clear calculator' }));
+
+    // Verify cleared
+    expect(screen.getByLabelText('GPU')).toHaveValue(defaultState.hardware.gpuName);
+
+    // Undo
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+
+    // Verify restored
+    expect(screen.getByLabelText('GPU')).toHaveValue('H200');
+    expect(screen.getByLabelText('Context tokens', { exact: true })).toHaveValue(16384);
+  });
+
+  it('Clear button in Planner resets Planner state and shows Undo notice', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Switch to Planner tab
+    await user.click(screen.getByRole('tab', { name: 'Planner' }));
+
+    // Click Clear button (when Planner has content, this test would verify more state)
+    const clearBtn = screen.getByRole('button', { name: 'Clear planner' });
+    expect(clearBtn).toBeInTheDocument();
+    await user.click(clearBtn);
+
+    // Verify Undo notice appears
+    expect(screen.getByText(/Cleared/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+  });
+
+  it("clearing the Planner never brings back the Calculator's undo notice", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Clear calculator' }));
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    await user.click(screen.getByRole('tab', { name: 'Planner' }));
+    await user.click(screen.getByRole('button', { name: 'Clear planner' }));
+    await user.click(screen.getByRole('tab', { name: 'Calculator' }));
+    const calcPanel = document.getElementById('tabpanel-calculator')!;
+    expect(within(calcPanel).queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+  });
+
+  it('Planner "Use" clears a stale Calculator speculative config so the Calculator agrees with the row (#25 review)', async () => {
+    const user = userEvent.setup();
+    // Seed the Calculator with speculative decoding on for a model/hardware combo the Planner
+    // will replace — a stale draft config must not survive "Use" and change the numbers.
+    const seeded: CalcState = {
+      ...defaultState,
+      speculative: { enabled: true, draftMode: 'custom', draftParams: 8e9, draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 },
+    };
+    window.history.replaceState(null, '', `/?${encodeState(seeded)}`);
+    render(<App />);
+
+    await user.click(screen.getByRole('tab', { name: 'Planner' }));
+    const sizing = screen.getByRole('region', { name: 'What hardware to serve N users?' });
+    const useButtons = await within(sizing).findAllByRole('button', { name: 'Use' });
+    await user.click(useButtons[0]);
+    await user.click(screen.getByRole('tab', { name: 'Calculator' }));
+
+    // Independently compute what "Use" should have produced, from HardwareSizing's own defaults
+    // (no handoff/Calculator-model override: DEFAULT_MODEL_PRESET, 32 users, 8K context,
+    // q4_k_m/fp16, generic runtime, 20 tok/s floor) — the same call HardwareSizing.tsx makes.
+    const { qualifying } = sizeHardware(
+      DEFAULT_MODEL_PRESET,
+      { contextTokens: 8192, concurrentUsers: 32 },
+      { quant: { weight: 'q4_k_m', kv: 'fp16' }, runtime: 'generic', minPerUserTokS: 20 },
+    );
+    const expected = qualifying[0];
+    expect(expected).toBeDefined();
+    // The row itself was never computed with speculation on.
+    expect(expected.result.speculative.enabled).toBe(false);
+
+    const headroom = document.querySelector<HTMLElement>('.verdict-detail .bytes-dec');
+    expect(headroom?.textContent).toBe(formatBytes(expected.result.runHeadroomBytes));
+
+    const maxUsersHeading = screen.getByText(`Max users at ${formatTokens(8192)}`);
+    const maxUsersValue = maxUsersHeading.parentElement?.querySelector('.big');
+    expect(maxUsersValue?.textContent).toBe(formatNumber(expected.result.maxUsersAtContext));
   });
 });

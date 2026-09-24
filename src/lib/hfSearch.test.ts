@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fuzzyMatches, searchHub } from './hfSearch';
+import { fuzzyMatches, listAuthorModels, searchHub } from './hfSearch';
 
 function res(status: number, body: unknown): Response {
   return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status });
@@ -83,6 +83,45 @@ describe('searchHub', () => {
   it('is silent when the response body is not an array', async () => {
     const fetchImpl = (async () => res(200, { error: 'nope' })) as unknown as typeof fetch;
     expect(await searchHub('llama', undefined, fetchImpl)).toEqual([]);
+  });
+});
+
+describe('listAuthorModels', () => {
+  it('queries by author, sorted by downloads, with no search term', async () => {
+    const fetchImpl = (async (url: string) => {
+      expect(url).toContain('https://huggingface.co/api/models?author=Qwen');
+      expect(url).toContain('sort=downloads');
+      expect(url).toContain('limit=20');
+      return res(200, [{ id: 'Qwen/Qwen3-32B', downloads: 500000, gated: false }]);
+    }) as unknown as typeof fetch;
+
+    expect(await listAuthorModels('Qwen', undefined, fetchImpl)).toEqual([
+      { id: 'Qwen/Qwen3-32B', downloads: 500000, gated: false },
+    ]);
+  });
+
+  it('returns an empty array for an empty author, without calling fetch', async () => {
+    let called = false;
+    const fetchImpl = (async () => {
+      called = true;
+      return res(200, []);
+    }) as unknown as typeof fetch;
+    expect(await listAuthorModels('  ', undefined, fetchImpl)).toEqual([]);
+    expect(called).toBe(false);
+  });
+
+  it('is silent on a non-OK response, a network failure, or unparsable JSON', async () => {
+    expect(await listAuthorModels('Qwen', undefined, (async () => res(503, 'down')) as unknown as typeof fetch)).toEqual([]);
+    expect(
+      await listAuthorModels(
+        'Qwen',
+        undefined,
+        (async () => {
+          throw new Error('offline');
+        }) as unknown as typeof fetch,
+      ),
+    ).toEqual([]);
+    expect(await listAuthorModels('Qwen', undefined, (async () => new Response('not json', { status: 200 })) as unknown as typeof fetch)).toEqual([]);
   });
 });
 

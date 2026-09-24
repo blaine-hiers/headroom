@@ -176,3 +176,138 @@ describe('clampState', () => {
     expect(clamped.model.params).toBe(0);
   });
 });
+
+// #21: the Planner's "use this" actions hand a partial config to the Calculator via
+// App.tsx's openInCalculator, which dispatches this action. This is that action's reducer path.
+describe('reducer: loadPartial (openInCalculator handoff)', () => {
+  const llama8b = preset('Llama 3.1 8B');
+
+  it('replaces every slice named in the patch', () => {
+    const patch = {
+      model: llama8b,
+      quant: { weight: 'q4_k_m', kv: 'fp8' } as const,
+      hardware: { gpuName: 'H100 SXM', gpuCount: 2, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 5, overheadGB: 1 },
+      workload: { contextTokens: 4096, concurrentUsers: 8 },
+      runtime: 'vllm' as const,
+    };
+    const s = reducer(defaultState, { type: 'loadPartial', patch });
+    expect(s.model.id).toBe(llama8b.id);
+    expect(s.quant).toEqual(patch.quant);
+    expect(s.hardware).toEqual(patch.hardware);
+    expect(s.workload).toEqual(patch.workload);
+    expect(s.runtime).toBe('vllm');
+  });
+
+  it('drops optional hardware fields the patch omits (offload, Apple limit, price)', () => {
+    const before = {
+      ...defaultState,
+      hardware: {
+        ...defaultState.hardware,
+        offload: { enabled: true, systemRamGB: 64, ramBandwidthGBs: 50 },
+        appleWiredLimitGB: 42,
+        usdPerHour: 9.99,
+      },
+    };
+    const hardware = { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, tflopsBf16: 165, reservePct: 5, overheadGB: 1 };
+    const s = reducer(before, { type: 'loadPartial', patch: { hardware } });
+    expect(s.hardware).toEqual(hardware);
+  });
+
+  it('leaves every slice the patch omits exactly as it was', () => {
+    const s = reducer(defaultState, { type: 'loadPartial', patch: { runtime: 'vllm' } });
+    expect(s.model).toBe(defaultState.model);
+    expect(s.quant).toBe(defaultState.quant);
+    expect(s.hardware).toBe(defaultState.hardware);
+    expect(s.workload).toBe(defaultState.workload);
+    expect(s.runtime).toBe('vllm');
+  });
+
+  it('a model patch still runs loadModel\'s own logic (quant follows the new model\'s native dtype)', () => {
+    const s = reducer(defaultState, { type: 'loadPartial', patch: { model: llama8b } });
+    expect(s.model.id).toBe(llama8b.id);
+    expect(s.quant.weight).not.toBeUndefined();
+  });
+
+  // Regression: a Planner "Use" (which never carries its own speculative config) must not leave
+  // a speculative draft set for a previous model/hardware combo silently attached to the new one.
+  it('a model+hardware patch clears a previously-set speculative config', () => {
+    const before: CalcState = {
+      ...defaultState,
+      speculative: { enabled: true, draftMode: 'custom', draftParams: 8e9, draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 },
+    };
+    const patch = {
+      model: llama8b,
+      hardware: { gpuName: 'H100 SXM', gpuCount: 2, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 5, overheadGB: 1 },
+      workload: { contextTokens: 4096, concurrentUsers: 8 },
+      runtime: 'vllm' as const,
+    };
+    const s = reducer(before, { type: 'loadPartial', patch });
+    expect(s.speculative).toBeUndefined();
+
+    // calculate() on the resulting Calculator state agrees exactly with calculate() run directly
+    // on the patch alone (no speculation) — the stale draft has zero effect on the numbers.
+    const full: CalcState = { model: patch.model, quant: s.quant, hardware: patch.hardware, workload: patch.workload, runtime: patch.runtime };
+    expect(calculate(s)).toEqual(calculate(full));
+  });
+
+  it('a patch that carries its own speculative config replaces the old one wholesale', () => {
+    const before: CalcState = {
+      ...defaultState,
+      speculative: { enabled: true, draftMode: 'custom', draftParams: 8e9, draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 },
+    };
+    const newSpeculative = { enabled: true, draftMode: 'custom' as const, draftParams: 1e9, draftWeightQuant: 'q8_0' as const, k: 5, alpha: 0.8 };
+    const s = reducer(before, { type: 'loadPartial', patch: { model: llama8b, speculative: newSpeculative } });
+    expect(s.speculative).toEqual(newSpeculative);
+  });
+
+  it('a patch touching neither model nor hardware leaves speculative untouched', () => {
+    const before: CalcState = {
+      ...defaultState,
+      speculative: { enabled: true, draftMode: 'custom', draftParams: 8e9, draftWeightQuant: 'q4_k_m', k: 4, alpha: 0.7 },
+    };
+    const s = reducer(before, { type: 'loadPartial', patch: { runtime: 'vllm' } });
+    expect(s.speculative).toBe(before.speculative);
+  });
+});
+
+describe('reducer: reset (#26 Clear button)', () => {
+  it('returns exactly the defaultState', () => {
+    const modified = reducer(defaultState, { type: 'hardware', patch: { gpuName: 'H100 SXM', gpuCount: 2 } });
+    const cleared = reducer(modified, { type: 'reset' });
+    expect(cleared).toEqual(defaultState);
+  });
+
+  it('resets all state slices to defaults after multiple changes', () => {
+    let s = defaultState;
+    s = reducer(s, { type: 'hardware', patch: { gpuCount: 4 } });
+    s = reducer(s, { type: 'workload', patch: { contextTokens: 32768, concurrentUsers: 10 } });
+    s = reducer(s, { type: 'quant', patch: { weight: 'q4_k_m' } });
+    s = reducer(s, { type: 'runtime', runtime: 'vllm' });
+
+    const cleared = reducer(s, { type: 'reset' });
+    expect(cleared).toEqual(defaultState);
+  });
+});
+
+describe('reducer: restore (#26 Undo)', () => {
+  it('restores the exact saved state including speculative config', () => {
+    // Enable speculative decoding
+    let s = reducer(defaultState, { type: 'speculative', patch: { k: 5, alpha: 0.7, draftModel: preset('Llama 3.1 8B') } });
+    s = reducer(s, { type: 'hardware', patch: { gpuCount: 2 } });
+
+    // Save the state with speculative
+    const savedState = s;
+
+    // Make more changes
+    let modified = reducer(s, { type: 'speculative', patch: { k: 3 } });
+    modified = reducer(modified, { type: 'hardware', patch: { gpuCount: 4 } });
+
+    // Restore the exact saved state
+    const restored = reducer(modified, { type: 'restore', state: savedState });
+
+    // Should match exactly, including speculative
+    expect(restored).toEqual(savedState);
+    expect(restored.speculative).toEqual(savedState.speculative);
+    expect(restored.hardware.gpuCount).toBe(2);
+  });
+});

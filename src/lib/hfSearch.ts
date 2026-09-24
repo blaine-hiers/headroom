@@ -19,21 +19,10 @@ function toHit(v: unknown): HubSearchHit | undefined {
   return { id: v.id, downloads, gated };
 }
 
-/**
- * Search huggingface.co/api/models by repo id substring, sorted by downloads.
- * Never throws: a network error, a non-OK response, or unparsable JSON all resolve to [].
- */
-export async function searchHub(
-  query: string,
-  token?: string,
-  fetchImpl: typeof fetch = fetch,
-  limit = 10,
-): Promise<HubSearchHit[]> {
-  const q = query.trim();
-  if (!q) return [];
+/** Shared by searchHub and listAuthorModels: fetch a Hub models listing URL and parse hits. Never throws. */
+async function fetchHits(url: string, token: string | undefined, fetchImpl: typeof fetch): Promise<HubSearchHit[]> {
   const headers: Record<string, string> = {};
   if (token && token.trim()) headers.Authorization = `Bearer ${token.trim()}`;
-  const url = `https://huggingface.co/api/models?search=${encodeURIComponent(q)}&limit=${limit}&sort=downloads&expand[]=gated`;
   try {
     const res = await fetchImpl(url, { headers });
     if (!res.ok) return [];
@@ -48,6 +37,41 @@ export async function searchHub(
   } catch {
     return [];
   }
+}
+
+/**
+ * Search huggingface.co/api/models by repo id substring, sorted by downloads.
+ * Never throws: a network error, a non-OK response, or unparsable JSON all resolve to [].
+ */
+export async function searchHub(
+  query: string,
+  token?: string,
+  fetchImpl: typeof fetch = fetch,
+  limit = 10,
+): Promise<HubSearchHit[]> {
+  const q = query.trim();
+  if (!q) return [];
+  const url = `https://huggingface.co/api/models?search=${encodeURIComponent(q)}&limit=${limit}&sort=downloads&expand[]=gated`;
+  return fetchHits(url, token, fetchImpl);
+}
+
+/**
+ * List one org's models on the Hub by downloads, for the provider picker's "More from
+ * <provider> on the Hub" section. Never throws: a network error, a non-OK response, or
+ * unparsable JSON all resolve to [], which the UI treats as "nothing to show" (hidden,
+ * not an error) — this is the only allowed extra network target, and it must degrade
+ * silently offline.
+ */
+export async function listAuthorModels(
+  author: string,
+  token?: string,
+  fetchImpl: typeof fetch = fetch,
+  limit = 20,
+): Promise<HubSearchHit[]> {
+  const org = author.trim();
+  if (!org) return [];
+  const url = `https://huggingface.co/api/models?author=${encodeURIComponent(org)}&sort=downloads&limit=${limit}`;
+  return fetchHits(url, token, fetchImpl);
 }
 
 /** Case-insensitive subsequence test: every character of `query` appears in `target`, in order. */

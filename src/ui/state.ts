@@ -1,5 +1,6 @@
 import {
   activeParamsDetailed,
+  clampWorkloadFor,
   CUSTOM_GPU_NAME,
   decodeState,
   DEFAULT_OFFLOAD,
@@ -7,14 +8,19 @@ import {
   DISABLED_SPECULATIVE,
   findGpuPreset,
   findModelPreset,
+  MAX_GPUS,
+  MAX_USERS,
+  maxContextFor,
+  MIN_CONTEXT,
   MODEL_PRESETS,
   refreshWarnings,
 } from '../lib';
 import type { CalcState, HardwareSpec, ModelSpec, Quant, RuntimeKey, SpeculativeConfig, Workload } from '../lib';
 
-export const MIN_CONTEXT = 256;
-export const MAX_USERS = 512;
-export const MAX_GPUS = 16;
+// Defined in src/lib/limits.ts (shared with taskPickerUrl.ts's decode clamping, taskPicker.ts's
+// and hardwareSizing.ts's own workload clamps) and re-exported here so every existing
+// `import { MAX_GPUS, maxContextFor } from './state'` (etc.) keeps working unchanged.
+export { MAX_GPUS, MAX_USERS, maxContextFor, MIN_CONTEXT };
 /** Upper bound for the integer shape fields (heads, dims, vocab, ...), matching the Advanced inputs. */
 export const MAX_DIM = 1e7;
 export const MAX_PARAMS = 1e14;
@@ -48,10 +54,12 @@ export function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
 }
 
-/** Upper bound of the context control for a model (never below the minimum). */
-export function maxContextFor(model: ModelSpec): number {
-  return Math.max(MIN_CONTEXT, Math.floor(model.maxPositionEmbeddings) || MIN_CONTEXT);
-}
+/**
+ * A config another tab (currently just the Planner, #24/#25) can hand to the Calculator via
+ * `openInCalculator` in App.tsx. Each field replaces that whole slice of state, same as loading
+ * a model or applying a hardware-finder result does today — it is not a deep-merge patch.
+ */
+export type OpenInCalculatorPatch = Partial<Pick<CalcState, 'model' | 'quant' | 'hardware' | 'workload' | 'runtime' | 'speculative'>>;
 
 export type Action =
   | { type: 'loadModel'; spec: ModelSpec }
@@ -60,13 +68,13 @@ export type Action =
   | { type: 'hardware'; patch: Partial<HardwareSpec> }
   | { type: 'workload'; patch: Partial<Workload> }
   | { type: 'runtime'; runtime: RuntimeKey }
-  | { type: 'speculative'; patch: Partial<SpeculativeConfig> };
+  | { type: 'speculative'; patch: Partial<SpeculativeConfig> }
+  | { type: 'loadPartial'; patch: OpenInCalculatorPatch }
+  | { type: 'reset' }
+  | { type: 'restore'; state: CalcState };
 
 function clampWorkload(w: Workload, model: ModelSpec): Workload {
-  return {
-    contextTokens: Math.round(clamp(w.contextTokens, MIN_CONTEXT, maxContextFor(model))),
-    concurrentUsers: Math.round(clamp(w.concurrentUsers, 1, MAX_USERS)),
-  };
+  return clampWorkloadFor(model, w);
 }
 
 export function reducer(state: CalcState, action: Action): CalcState {
@@ -123,6 +131,28 @@ export function reducer(state: CalcState, action: Action): CalcState {
       if ('draftParams' in action.patch && action.patch.draftParams === undefined) delete merged.draftParams;
       return { ...state, speculative: merged };
     }
+    case 'loadPartial': {
+      const { patch } = action;
+      let next = state;
+      if (patch.model !== undefined) next = reducer(next, { type: 'loadModel', spec: patch.model });
+      if (patch.quant !== undefined) next = { ...next, quant: { ...patch.quant } };
+      // Whole-slice replace: optional fields the patch omits (offload, appleWiredLimitGB,
+      // usdPerHour) must not survive from the previous hardware.
+      if (patch.hardware !== undefined) next = { ...next, hardware: { ...patch.hardware } };
+      if (patch.workload !== undefined) next = reducer(next, { type: 'workload', patch: patch.workload });
+      if (patch.runtime !== undefined) next = { ...next, runtime: patch.runtime };
+      // A new model or hardware invalidates whatever speculative config was set for the old
+      // one (a draft model sized for a different target, or a draft that no longer makes sense
+      // on different hardware) — whole-replace it with whatever the patch carries, undefined
+      // (off) when it carries none. Planner rows are always computed without speculation, so
+      // "Use" always lands on a Calculator that agrees with the row it came from.
+      if (patch.model !== undefined || patch.hardware !== undefined) next = { ...next, speculative: patch.speculative };
+      return next;
+    }
+    case 'reset':
+      return defaultState;
+    case 'restore':
+      return action.state;
   }
 }
 

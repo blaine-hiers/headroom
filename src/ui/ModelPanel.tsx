@@ -1,13 +1,15 @@
 import { useId, useRef, useState } from 'react';
 import { activeParamsDetailed, fetchRepo, findModelPreset, formatBytes, MODEL_PRESETS } from '../lib';
-import type { Attention, GgufOption, ModelSpec, MoeSpec, NativeDtype } from '../lib';
+import type { Attention, GgufOption, ModelSpec, MoeSpec, NativeDtype, WeightQuantKey } from '../lib';
 import { NumberField } from './NumberField';
+import { ProviderPicker } from './ProviderPicker';
 import { RepoSearch } from './RepoSearch';
 import { readStorage, REMEMBER_TOKEN_KEY, TOKEN_KEY, writeStorage } from './storage';
 import { getRecents, addRecent, removeRecent, clearRecents } from './recents';
 
 interface Props {
   model: ModelSpec;
+  weightQuant: WeightQuantKey;
   onLoad: (spec: ModelSpec) => void;
   onEdit: (patch: Partial<ModelSpec>) => void;
 }
@@ -22,7 +24,7 @@ const SOURCE_LABEL: Record<ModelSpec['source'], string> = {
 
 const BIG = 1e7;
 
-export function ModelPanel({ model, onLoad, onEdit }: Props) {
+export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
   const inputId = useId();
   const tokenId = useId();
   const rememberId = useId();
@@ -112,19 +114,7 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
         </div>
       )}
 
-      <div className="chips" role="group" aria-label="Built-in model presets">
-        {MODEL_PRESETS.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            className="chip"
-            aria-pressed={model.source === 'preset' && model.id === p.id}
-            onClick={() => pickPreset(p)}
-          >
-            {p.name}
-          </button>
-        ))}
-      </div>
+      <ProviderPicker loadedModelId={model.id} weightQuant={weightQuant} token={token || undefined} onSelect={pickPreset} onSelectHub={(id) => void doFetch(id)} />
 
       {recents.length > 0 && (
         <div className="chips" role="group" aria-label="Recent models">
