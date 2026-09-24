@@ -220,4 +220,46 @@ describe('App', () => {
     await user.tab();
     expect(screen.getByText('· built-in preset')).toBeInTheDocument();
   });
+
+  it('a fetched model appears as a recent chip and reloads without calling fetch', async () => {
+    const fetchMock = vi.fn((url: string) =>
+      Promise.resolve(url.includes('/api/models/') ? jsonResponse(qwenApi) : jsonResponse(qwenConfig)),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Fetch Qwen model
+    const input = screen.getByLabelText('Hugging Face repo id');
+    await user.clear(input);
+    await user.type(input, 'Qwen/Qwen2.5-7B-Instruct{Enter}');
+
+    expect(await screen.findByText('· from Hugging Face')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalled();
+
+    // Verify the model was stored in localStorage
+    const storedRecents = JSON.parse(window.localStorage.getItem('headroom.recents') || '[]');
+    expect(storedRecents).toHaveLength(1);
+    expect(storedRecents[0].id).toBe('Qwen/Qwen2.5-7B-Instruct');
+
+    // Switch to a different model (Llama 3.1 8B preset)
+    await user.click(screen.getByRole('button', { name: 'Llama 3.1 8B' }));
+    expect(screen.getByText('· built-in preset')).toBeInTheDocument();
+
+    // Reset the fetch mock call count
+    fetchMock.mockClear();
+
+    // Click on the Qwen recent chip (it should be rendered in the recent models section)
+    // The recent chip should now be visible; find it and click it
+    const recentButtons = screen.getAllByRole('button', { hidden: false });
+    const qwenButton = recentButtons.find((btn) => btn.textContent?.includes('Qwen2.5-7B-Instruct'));
+    expect(qwenButton).toBeInTheDocument();
+    await user.click(qwenButton!);
+
+    // Verify the model is loaded from localStorage
+    expect(await screen.findByText('· from Hugging Face')).toBeInTheDocument();
+
+    // Verify no fetch calls were made (model was loaded from localStorage)
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
