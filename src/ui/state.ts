@@ -7,14 +7,17 @@ import {
   DISABLED_SPECULATIVE,
   findGpuPreset,
   findModelPreset,
+  MAX_GPUS,
+  MAX_USERS,
+  MIN_CONTEXT,
   MODEL_PRESETS,
   refreshWarnings,
 } from '../lib';
 import type { CalcState, HardwareSpec, ModelSpec, Quant, RuntimeKey, SpeculativeConfig, Workload } from '../lib';
 
-export const MIN_CONTEXT = 256;
-export const MAX_USERS = 512;
-export const MAX_GPUS = 16;
+// Defined in src/lib/limits.ts (shared with taskPickerUrl.ts's decode clamping) and re-exported
+// here so every existing `import { MAX_GPUS } from './state'` (etc.) keeps working unchanged.
+export { MAX_GPUS, MAX_USERS, MIN_CONTEXT };
 /** Upper bound for the integer shape fields (heads, dims, vocab, ...), matching the Advanced inputs. */
 export const MAX_DIM = 1e7;
 export const MAX_PARAMS = 1e14;

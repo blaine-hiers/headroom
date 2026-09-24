@@ -8,11 +8,14 @@
 // ("Which model for this task?") sets it via `setHandoffModelId`, step 2 ("What hardware to
 // serve N users?") reads it to preselect the model it sizes hardware for.
 
+import { DEFAULT_TASK_PICKER_CONSTRAINTS } from '../../lib';
+import type { TaskPickerConstraints } from '../../lib';
+
 export interface PlannerState {
   /** Set by TaskPicker (#24) once it recommends a model; read by HardwareSizing (#25). */
   handoffModelId?: string;
-  /** #24 adds its own picker state here (selections, filters, etc.) as an optional sub-object. */
-  taskPicker?: Record<string, never>;
+  /** The TaskPicker's own inputs (#24); absent until the user changes one, so a fresh Planner visit stays out of the URL. */
+  taskPicker?: TaskPickerConstraints;
   /** #25 adds its own sizing state here (target users, chosen GPU, etc.) as an optional sub-object. */
   hardwareSizing?: Record<string, never>;
 }
@@ -21,6 +24,7 @@ export const initialPlannerState: PlannerState = {};
 
 export type PlannerAction =
   | { type: 'setHandoffModelId'; modelId: string | undefined }
+  | { type: 'taskPicker/setConstraints'; patch: Partial<TaskPickerConstraints> }
   | { type: 'clear' }
   | { type: 'restore'; state: PlannerState };
 
@@ -32,6 +36,10 @@ export function plannerReducer(state: PlannerState, action: PlannerAction): Plan
         return rest;
       }
       return { ...state, handoffModelId: action.modelId };
+    }
+    case 'taskPicker/setConstraints': {
+      const base = state.taskPicker ?? DEFAULT_TASK_PICKER_CONSTRAINTS;
+      return { ...state, taskPicker: { ...base, ...action.patch } };
     }
     case 'clear':
       return {};
