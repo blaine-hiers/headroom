@@ -1,8 +1,9 @@
+import { resolveWeights } from './fileWeights';
 import { kvBytesForContext, kvBytesPerToken } from './kvcache';
 import { checkTensorParallelSplit, tensorParallelEfficiency } from './tensorParallel';
 import { DECODE_EFFICIENCY, decodeThroughput } from './throughput';
 import type { CalcResult, CalcState, HardwareSpec } from './types';
-import { activeParamsDetailed, weightBytes } from './weights';
+import { activeParamsDetailed } from './weights';
 import { findGpuPreset } from './presets/gpus';
 
 export const TABLE_CONTEXTS = [2048, 8192, 32768, 131072] as const;
@@ -80,7 +81,10 @@ export function calculate(state: CalcState): CalcResult {
   const perToken = kvBytesPerToken(model, quant.kv) * kvReplication;
   const perRequest = kvBytesForContext(model, ctx, quant.kv) * kvReplication;
   const allUsers = perRequest * users;
-  const weights = weightBytes(model.params, quant.weight);
+  // Recomputed from the spec (not model.activeParams) so a manual edit stays consistent.
+  const active = activeParamsDetailed(model);
+  const resolved = resolveWeights(model, quant.weight, active.active);
+  const weights = resolved.bytes;
   const overhead = overheadBytes(hardware);
   const usable = usableBytes(hardware);
   const fixed = weights + overhead;
@@ -95,9 +99,7 @@ export function calculate(state: CalcState): CalcResult {
       return { contextTokens: c, kvBytesPerRequest: kvReq, maxUsers: maxUsers(usable, fixed, kvReq) };
     });
 
-  // Recomputed from the spec (not model.activeParams) so a manual edit stays consistent.
-  const active = activeParamsDetailed(model);
-  const activeWeightBytes = weightBytes(active.active, quant.weight);
+  const activeWeightBytes = resolved.activeBytes;
   // Multi-GPU tensor-parallel communication overhead, as a small labelled efficiency
   // penalty per doubling of GPU count (see tensorParallel.ts). 1× at gpuCount 1.
   const throughput = decodeThroughput({
@@ -114,6 +116,8 @@ export function calculate(state: CalcState): CalcResult {
     kvBytesPerRequest: perRequest,
     kvBytesAllUsers: allUsers,
     weightBytes: weights,
+    weightSource: resolved.source,
+    activeWeightBytes,
     activeParams: active.active,
     activeParamsMethod: active.method,
     overheadBytes: overhead,

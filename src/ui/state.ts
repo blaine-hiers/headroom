@@ -16,6 +16,8 @@ export const MAX_GPUS = 16;
 /** Upper bound for the integer shape fields (heads, dims, vocab, ...), matching the Advanced inputs. */
 export const MAX_DIM = 1e7;
 export const MAX_PARAMS = 1e14;
+/** Upper bound for exact weight-file bytes from a (shared) link. */
+export const MAX_FILE_BYTES = 1e15;
 
 const DEFAULT_MODEL = findModelPreset('meta-llama/Llama-3.3-70B-Instruct') ?? MODEL_PRESETS[0];
 const DEFAULT_GPU = findGpuPreset('RTX 4090');
@@ -65,12 +67,16 @@ export function reducer(state: CalcState, action: Action): CalcState {
       return {
         ...state,
         model,
-        quant: { ...state.quant, weight: defaultWeightQuantFor(model.nativeDtype) },
+        // Repo files pin the quant they are in; otherwise start from the native dtype.
+        quant: { ...state.quant, weight: model.fileWeights?.quant ?? defaultWeightQuantFor(model.nativeDtype) },
         workload: clampWorkload(state.workload, model),
       };
     }
     case 'editModel': {
       const merged: ModelSpec = { ...state.model, ...action.patch, source: 'manual' };
+      // Weight-file bytes describe the repo as loaded: an edit to params or the architecture
+      // (anything but the native dtype) makes them stale, so the estimate takes over.
+      if (Object.keys(action.patch).some((k) => k !== 'nativeDtype')) delete merged.fileWeights;
       // `moe: undefined` in a patch means "dense": drop the key rather than keep an undefined.
       if ('moe' in action.patch && action.patch.moe === undefined) delete merged.moe;
       merged.activeParams = activeParamsDetailed(merged).active;
@@ -143,6 +149,7 @@ export function clampModel(m: ModelSpec): ModelSpec {
     if (qLora !== undefined) out.ffn.qLoraRank = qLora;
     if (vHead !== undefined) out.ffn.vHeadDim = vHead;
   }
+  if (m.fileWeights) out.fileWeights = { ...m.fileWeights, bytes: clamp(m.fileWeights.bytes, 0, MAX_FILE_BYTES) };
   out.activeParams = activeParamsDetailed(out).active;
   return out;
 }

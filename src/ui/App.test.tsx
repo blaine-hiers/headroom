@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { encodeState } from '../lib';
 import qwenApi from '../lib/__fixtures__/qwen2.5-7b-instruct.api.json';
 import qwenConfig from '../lib/__fixtures__/qwen2.5-7b-instruct.json';
+import { fromBase64 } from '../lib/__fixtures__/base64';
+import qwenMoeB64 from '../lib/__fixtures__/qwen3-30b-a3b-q4_k_m.gguf.b64?raw';
 import App from './App';
 import { defaultState } from './state';
 
@@ -113,10 +115,46 @@ describe('App', () => {
     await user.type(input, 'Qwen/Qwen2.5-7B-Instruct{Enter}');
 
     expect(await screen.findByText('· from Hugging Face')).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3); // model API, config.json, file listing
     // 2 × 28 × 4 × 128 × 2 = 57,344 B
     expect(screen.getAllByText('57.3 KB').length).toBeGreaterThan(0);
     expect(screen.getAllByText('56 KiB').length).toBeGreaterThan(0);
+  });
+
+  it('fetches a GGUF repo: file picker, exact weight bytes, and the source on the Weights card', async () => {
+    const listing = {
+      siblings: [
+        { rfilename: 'Qwen_Qwen3-30B-A3B-Q4_K_M.gguf', size: 18_556_686_080 },
+        { rfilename: 'Qwen_Qwen3-30B-A3B-Q8_0.gguf', size: 32_483_935_968 },
+      ],
+      gguf: { total: 30_532_122_624 },
+    };
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('?blobs=true')) return Promise.resolve(jsonResponse(listing));
+      if (url.includes('/api/models/')) return Promise.resolve(jsonResponse({}));
+      if (url.endsWith('config.json')) return Promise.resolve(jsonResponse({ error: 'Entry not found' }, 404));
+      return Promise.resolve(new Response(fromBase64(qwenMoeB64), { status: 206 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const user = userEvent.setup();
+    render(<App />);
+    const input = screen.getByLabelText('Hugging Face repo id');
+    await user.clear(input);
+    await user.type(input, 'bartowski/Qwen_Qwen3-30B-A3B-GGUF{Enter}');
+
+    expect(await screen.findByText('· from Hugging Face')).toBeInTheDocument();
+    expect(screen.getByLabelText('GGUF file')).toHaveValue('Qwen_Qwen3-30B-A3B-Q4_K_M.gguf');
+    expect(screen.getByLabelText('Weights')).toHaveValue('q4_k_m');
+    expect(screen.getAllByText('18.6 GB').length).toBeGreaterThan(0);
+    expect(screen.getByText(/Q4_K_M GGUF, from repo files, 4\.86 bits\/weight effective/)).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText('GGUF file'), 'Qwen_Qwen3-30B-A3B-Q8_0.gguf');
+    expect(await screen.findByText(/Q8_0 GGUF, from repo files/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Weights')).toHaveValue('q8_0');
+
+    // Another quant than the files' one: back to the estimate, and the card says so.
+    await user.selectOptions(screen.getByLabelText('Weights'), 'bf16');
+    expect(screen.getByText(/BF16, 16 bits\/weight, estimated/)).toBeInTheDocument();
   });
 
   it('shows the fetching status, then the gated error with a preset fallback (401)', async () => {

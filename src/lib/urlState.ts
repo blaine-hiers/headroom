@@ -42,6 +42,9 @@ const K = {
   appleWiredLimitGB: 'awl',
   contextTokens: 'c',
   concurrentUsers: 'u',
+  fileWeightBytes: 'fwb',
+  fileWeightLabel: 'fwl',
+  fileWeightQuant: 'fwq',
 } as const;
 
 const ATTENTIONS: readonly Attention[] = ['mha_gqa', 'mla'];
@@ -72,6 +75,11 @@ export function encodeState(state: CalcState): string {
   set(K.nativeDtype, m.nativeDtype);
   if (m.moe) set(K.moe, `${m.moe.numExperts},${m.moe.expertsPerToken},${m.moe.sharedExperts}`);
   if (m.ffn) set(K.ffn, encodeFfn(m.ffn));
+  if (m.fileWeights) {
+    set(K.fileWeightBytes, m.fileWeights.bytes);
+    set(K.fileWeightLabel, m.fileWeights.label);
+    set(K.fileWeightQuant, m.fileWeights.quant);
+  }
   set(K.source, m.source);
   for (const w of m.warnings) q.append(K.warnings, w);
   set(K.weightQuant, state.quant.weight);
@@ -179,6 +187,13 @@ export function decodeState(qs: string, fallback: CalcState): CalcState {
     }
     const ffnRaw = q.get(K.ffn);
     if (ffnRaw !== null) model.ffn = decodeFfn(ffnRaw);
+    // File bytes only mean something with the quant they are in: without `fwq` they are ignored.
+    if (q.has(K.fileWeightBytes) && q.has(K.fileWeightQuant)) {
+      const bytes = num(K.fileWeightBytes);
+      if (!(bytes > 0)) throw new BadState();
+      const quant = oneOf(q.get(K.fileWeightQuant), Object.keys(WEIGHT_QUANTS) as WeightQuantKey[]);
+      model.fileWeights = { bytes, label: q.get(K.fileWeightLabel) ?? '', quant };
+    }
 
     return {
       model,

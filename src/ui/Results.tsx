@@ -1,4 +1,4 @@
-import { formatNumber, formatTokens, KV_QUANTS, WEIGHT_QUANTS } from '../lib';
+import { effectiveBitsPerWeight, formatNumber, formatTokens, KV_QUANTS, WEIGHT_QUANTS } from '../lib';
 import type { ActiveParamsMethod, CalcResult, CalcState } from '../lib';
 import { Bytes } from './Bytes';
 import { Chart } from './Chart';
@@ -95,9 +95,16 @@ export function Results({ state, result }: Props) {
         <div className="card stat">
           <h3>Weights</h3>
           <Bytes value={result.weightBytes} stacked />
-          <p className="muted">
-            {WEIGHT_QUANTS[quant.weight].label}, {WEIGHT_QUANTS[quant.weight].bitsPerWeight} bits/weight
-          </p>
+          {result.weightSource === 'files' ? (
+            <p className="muted weight-source">
+              {model.fileWeights?.label}, from repo files
+              {model.params > 0 && <>, {formatNumber(effectiveBitsPerWeight(result.weightBytes, model.params), 2)} bits/weight effective</>}
+            </p>
+          ) : (
+            <p className="muted weight-source">
+              {WEIGHT_QUANTS[quant.weight].label}, {WEIGHT_QUANTS[quant.weight].bitsPerWeight} bits/weight, estimated
+            </p>
+          )}
           <p className="muted active-params">
             {billions(result.activeParams)} active per token ({METHOD_LABEL[result.activeParamsMethod]})
           </p>

@@ -57,6 +57,8 @@ export interface ModelSpec {
   nativeDtype: NativeDtype;
   moe?: MoeSpec;
   ffn?: FfnSpec;
+  /** Weight size read from the repo's files (pre-quantized or GGUF repos), not estimated. */
+  fileWeights?: FileWeights;
   source: 'hf' | 'preset' | 'manual';
   warnings: string[];
 }
@@ -97,6 +99,18 @@ export interface TensorParallelCheck {
    */
   kvReplicationFactor: number;
 }
+
+/** Exact weight bytes summed from a repo's weight files. */
+export interface FileWeights {
+  bytes: number;
+  /** What the files are, e.g. "Q4_K_M GGUF" or "AWQ safetensors". */
+  label: string;
+  /** The weight quant the files match; picking another quant falls back to the estimate. */
+  quant: WeightQuantKey;
+}
+
+/** Where the weight figure came from. */
+export type WeightSource = 'files' | 'estimate';
 
 export type WeightQuantKey =
   | 'fp32'
@@ -154,6 +168,9 @@ export interface CalcResult {
   kvBytesPerRequest: number; // at workload.contextTokens, sliding-window aware
   kvBytesAllUsers: number;
   weightBytes: number;
+  weightSource: WeightSource;
+  /** Weight bytes read per decode step (the active params' share of the weights). */
+  activeWeightBytes: number;
   /** Parameters read per decode step, and how the figure was estimated. */
   activeParams: number;
   activeParamsMethod: ActiveParamsMethod;

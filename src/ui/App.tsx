@@ -58,7 +58,7 @@ export default function App() {
         <Results state={state} result={result} />
       </main>
       <footer className="footer muted">
-        Model data from the Hugging Face Hub (config.json + safetensors parameter count) or built-in presets.
+        Model data from the Hugging Face Hub (config.json + safetensors parameter count, repo file sizes, GGUF headers) or built-in presets.
       </footer>
     </div>
   );

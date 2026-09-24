@@ -9,7 +9,6 @@ import {
   kvBytesPerTokenPerLayer,
   TP_PENALTY_PER_DOUBLING,
   WEIGHT_QUANTS,
-  weightBytes,
 } from '../lib';
 import type { ActiveParamsMethod, CalcResult, CalcState } from '../lib';
 import { Bytes } from './Bytes';
@@ -80,7 +79,8 @@ export function ShowTheMath({ state, result }: Props) {
   const fixed = result.weightBytes + result.overheadBytes;
   const active = result.activeParams;
   const method = result.activeParamsMethod;
-  const activeBytes = weightBytes(active, quant.weight);
+  const activeBytes = result.activeWeightBytes;
+  const fromFiles = result.weightSource === 'files';
   const B = (v: number) => <Bytes value={v} />;
   const maxU = result.maxUsersAtContext;
 
@@ -132,12 +132,21 @@ export function ShowTheMath({ state, result }: Props) {
           />
         )}
         <Step title="KV for all users" formula="KV per request × N" sub={`${n(result.kvBytesPerRequest)} × ${n(N)}`} result={B(result.kvBytesAllUsers)} />
-        <Step
-          title="Weights"
-          formula="params × bitsPerWeight / 8"
-          sub={`${n(model.params)} × ${bits} / 8`}
-          result={B(result.weightBytes)}
-        />
+        {fromFiles ? (
+          <Step
+            title={`Weights (from repo files: ${model.fileWeights?.label ?? ''})`}
+            formula="sum of the weight files' sizes"
+            sub={`${n(result.weightBytes)} B`}
+            result={B(result.weightBytes)}
+          />
+        ) : (
+          <Step
+            title="Weights"
+            formula="params × bitsPerWeight / 8"
+            sub={`${n(model.params)} × ${bits} / 8`}
+            result={B(result.weightBytes)}
+          />
+        )}
         <Step
           title={`Usable VRAM${appleNote}`}
           formula={isAppleGpu ? "gpuCount × effectiveVramGB × 1e9 × (1 − reserve%/100)" : "gpuCount × vramGB × 1e9 × (1 − reserve%/100)"}
@@ -171,6 +180,14 @@ export function ShowTheMath({ state, result }: Props) {
           result={`${n(result.maxContextForUsers)} tokens`}
         />
         <ActiveParamsStep state={state} active={active} method={method} />
+        {fromFiles && model.params > 0 && (
+          <Step
+            title="Active weights (share of the repo files)"
+            formula="fileBytes × activeParams / params"
+            sub={`${n(result.weightBytes)} × ${n(active)} / ${n(model.params)}`}
+            result={B(activeBytes)}
+          />
+        )}
         {hw.gpuCount > 1 && (
           <Step
             title="Tensor-parallel communication penalty"
