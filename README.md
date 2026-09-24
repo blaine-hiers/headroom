@@ -195,6 +195,25 @@ Gated repos such as Llama and Gemma return 401 without a token. You have two opt
 Presets are plain data in [`src/lib/presets/`](src/lib/presets/):
 
 - **GPU:** add an entry to `GPU_PRESETS` in `gpus.ts` with its `name`, `vendor` (`nvidia-consumer`, `nvidia-datacenter`, `amd`, `apple` or `other`), per-GPU `vramGB` in decimal GB, `bandwidthGBs`, and `tflopsBf16` (dense, no-sparsity BF16 tensor TFLOPS from the vendor spec sheet; used for the TTFT estimate). It appears in the GPU select under its vendor group, with all three fields editable once selected. For a GPU that's actually rented by the hour (datacenter NVIDIA, AMD MI300X), also add `usdPerHour`: a typical on-demand cloud list price, dated in a comment. Leave it out for consumer/workstation cards, Apple and DGX Spark.
-- **Model:** add a `preset({...})` entry to `MODEL_PRESETS` in `models.ts`. Take the values from the repo's `config.json` and the Hub API's `safetensors.total`. It appears as a quick-pick chip. Add `warnings` for anything a user should know, such as sliding windows, MoE or pre-quantized weights.
+- **Model:** add an entry to `MODEL_CATALOG` in `catalog.ts` (see below). It appears as a quick-pick chip and in `MODEL_PRESETS`, the catalog's flat, id-keyed view.
 
-Then run `npm test`: `presets.test.ts` checks every preset for sane values.
+Then run `npm test`: `presets.test.ts` checks every preset and catalog entry for sane values.
+
+## The model catalog
+
+`src/lib/presets/catalog.ts` is a bundled, offline catalog of Hub models grouped by provider, used to build the provider and model-for-task pickers on top of. Each entry is `{ spec: ModelSpec, meta: CatalogMeta }`:
+
+- `spec` is a full `ModelSpec`, built with the same `preset()` helper the original flat presets used — the calculator works on it with no network call. For an ungated repo, the values come straight from `config.json` and the Hub API's `safetensors.total` (the same fields `parseConfig()` in `hf.ts` would derive from a live fetch). For a gated repo (`meta-llama/*`, `google/*`, which 401 without a Hub token), the values are the hand-verified numbers already used by the original 15 presets — see the comments on each entry for how those were sourced.
+- `meta` is catalog-only metadata, kept out of `ModelSpec` so preset ids and shared-link shapes never change:
+  - `provider` — one of `PROVIDERS`' ids (`meta`, `qwen`, `google`, `mistral`, `deepseek`, `openai`, `microsoft`, `moonshot`, `zhipu`, `nvidia`)
+  - `family` — a human label such as `"Qwen3"` or `"R1 Distill"`
+  - `tags` — one or more of the fixed `TASK_TAGS` vocabulary: `chat`, `coding`, `reasoning`, `long-context`, `vision`, `tool-use`, `multilingual`, `small-edge`. **Tags are taken from each model card's own stated capabilities and are a coarse guide, not a benchmark** — two models sharing a tag aren't necessarily equally good at it.
+  - `license` — a short SPDX-ish string (`apache-2.0`, `mit`, ...) or the vendor's own community-license name when there's no SPDX id (`llama3.1`, `gemma`, `nvidia-open`, `modified-mit`)
+  - `releaseDate` — `YYYY-MM`, approximate
+  - `note` — optional one-line caveat (e.g. a distilled model's base-model license)
+
+Accessors, exported from `catalog.ts` and re-exported from `src/lib/`: `MODEL_CATALOG` (all entries), `PROVIDERS` (ordered `{ id, name, hubOrg }`), `TASK_TAGS`, `catalogByProvider(providerId)`, and `findCatalogEntry(idOrName)` (mirrors `findModelPreset`, matching by id or display name). `MODEL_PRESETS`/`findModelPreset` in `models.ts` are unchanged as a name/behaviour and are now a thin, generated flat view (`MODEL_CATALOG.map(e => e.spec)`) — existing preset ids, shared links and recents keep resolving.
+
+**Verifying the data.** `npm run check-catalog` (`scripts/check-catalog.mjs`) re-fetches every ungated entry's `config.json` and safetensors total from the Hub, runs it through the same `parseConfig()` the live fetch path uses, and diffs the result field-by-field against what's bundled — so the numbers can be re-verified whenever the repos change. Gated entries (Meta, Google) are reported as skipped rather than fetched, since they 401 without a token. It exits non-zero on drift or an unexpected fetch error. The script imports this repo's extensionless, bundler-style TS sources directly under Node's native TypeScript support via `scripts/ts-loader.mjs`, a ~20-line module resolution hook (no bundler dependency added).
+
+**Coverage.** Meta and Google presets are the pre-existing hand-verified ones (gated, so left as-is). Nemotron's other public models are left out: `nvidia/Llama-3.1-Nemotron-70B-Instruct-HF` is gated (401), and `nvidia/Llama-3.3-Nemotron-Super-49B-v1` uses a heterogeneous per-layer ("puzzle" NAS) architecture with no single `intermediate_size`/head count for `parseConfig()` to read, so it's left out rather than guessing. OpenAI's gpt-oss ships exactly two public sizes (120b, 20b) — both are already bundled.

@@ -26,3 +26,4 @@ export * from './exportMarkdown';
 export * from './exportCsv';
 export * from './presets/gpus';
 export * from './presets/models';
+export * from './presets/catalog';
