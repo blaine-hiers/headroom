@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makeSpec } from './__fixtures__/makeSpec';
-import { calculate, maxContext, maxUsers, overheadBytes, usableBytes } from './fit';
+import { calculate, effectiveVramGB, maxContext, maxUsers, overheadBytes, usableBytes } from './fit';
 import { findGpuPreset } from './presets/gpus';
 import { findModelPreset } from './presets/models';
 import type { CalcState, HardwareSpec } from './types';
@@ -24,6 +24,96 @@ describe('usable and overhead', () => {
   });
   it('overhead = GB × 1e9 × count', () => {
     expect(overheadBytes(h100x4)).toBe(4e9);
+  });
+});
+
+describe('effectiveVramGB for Apple GPUs', () => {
+  it('non-Apple GPUs return vramGB unchanged', () => {
+    expect(effectiveVramGB('H100 SXM', 80)).toBe(80);
+    expect(effectiveVramGB('RTX 4090', 24)).toBe(24);
+    expect(effectiveVramGB('AMD MI300X', 192)).toBe(192);
+  });
+
+  it('Apple GPUs <= 36 GB apply 0.67x wired limit', () => {
+    expect(effectiveVramGB('Apple M4 Max', 32, undefined)).toBeCloseTo(32 * 0.67, 1);
+    expect(effectiveVramGB('Apple M4 Max', 36, undefined)).toBeCloseTo(36 * 0.67, 1);
+  });
+
+  it('Apple GPUs > 36 GB apply 0.75x wired limit', () => {
+    expect(effectiveVramGB('Apple M2 Ultra', 192, undefined)).toBeCloseTo(192 * 0.75, 1);
+    expect(effectiveVramGB('Apple M3 Ultra', 512, undefined)).toBeCloseTo(512 * 0.75, 1);
+  });
+
+  it('Apple GPU with override uses the custom limit', () => {
+    expect(effectiveVramGB('Apple M2 Ultra', 192, 120)).toBe(120);
+    expect(effectiveVramGB('Apple M4 Max', 32, 28)).toBe(28);
+    // Custom limit is clamped to vramGB
+    expect(effectiveVramGB('Apple M2 Ultra', 192, 256)).toBe(192);
+  });
+
+  it('unknown GPU name (e.g. Custom) returns vramGB unchanged', () => {
+    expect(effectiveVramGB('Custom', 24)).toBe(24);
+    expect(effectiveVramGB('MyGPU', 100)).toBe(100);
+  });
+});
+
+describe('usableBytes with Apple wired limit', () => {
+  it('applies Apple wired limit for Apple M2 Ultra (> 36 GB)', () => {
+    const hw: HardwareSpec = {
+      gpuName: 'Apple M2 Ultra',
+      gpuCount: 1,
+      vramGB: 192,
+      bandwidthGBs: 800,
+      reservePct: 5,
+      overheadGB: 1,
+    };
+    // 192 * 0.75 * 0.95 * 1e9 = expected usable
+    const expected = 192 * 0.75 * 0.95 * 1e9;
+    expect(usableBytes(hw)).toBeCloseTo(expected, 0);
+  });
+
+  it('applies Apple wired limit for Apple M4 Max (<= 36 GB)', () => {
+    const hw: HardwareSpec = {
+      gpuName: 'Apple M4 Max',
+      gpuCount: 1,
+      vramGB: 32,
+      bandwidthGBs: 546,
+      reservePct: 5,
+      overheadGB: 1,
+    };
+    // 32 * 0.67 * 0.95 * 1e9 = expected usable
+    const expected = 32 * 0.67 * 0.95 * 1e9;
+    expect(usableBytes(hw)).toBeCloseTo(expected, 0);
+  });
+
+  it('uses custom Apple wired limit when provided', () => {
+    const hw: HardwareSpec = {
+      gpuName: 'Apple M2 Ultra',
+      gpuCount: 1,
+      vramGB: 192,
+      bandwidthGBs: 800,
+      reservePct: 5,
+      overheadGB: 1,
+      appleWiredLimitGB: 120,
+    };
+    // 120 * 0.95 * 1e9 = expected usable
+    const expected = 120 * 0.95 * 1e9;
+    expect(usableBytes(hw)).toBeCloseTo(expected, 0);
+  });
+
+  it('non-Apple GPUs ignore wired limit override', () => {
+    const hw: HardwareSpec = {
+      gpuName: 'H100 SXM',
+      gpuCount: 1,
+      vramGB: 80,
+      bandwidthGBs: 3350,
+      reservePct: 5,
+      overheadGB: 1,
+      appleWiredLimitGB: 50,
+    };
+    // Non-Apple GPU should use full 80 GB, ignoring the override
+    const expected = 80 * 0.95 * 1e9;
+    expect(usableBytes(hw)).toBeCloseTo(expected, 0);
   });
 });
 

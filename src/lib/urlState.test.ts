@@ -56,6 +56,24 @@ describe('urlState', () => {
     expect(qs.length).toBeLessThan(400);
   });
 
+  it('round-trips Apple wired-memory limit override', () => {
+    const s: CalcState = {
+      ...fallback,
+      hardware: { gpuName: 'Apple M2 Ultra', gpuCount: 1, vramGB: 192, bandwidthGBs: 800, reservePct: 5, overheadGB: 1, appleWiredLimitGB: 120 },
+    };
+    expect(decodeState(encodeState(s), fallback)).toEqual(s);
+  });
+
+  it('omits Apple wired-memory limit when undefined', () => {
+    const s: CalcState = {
+      ...fallback,
+      hardware: { gpuName: 'Apple M2 Ultra', gpuCount: 1, vramGB: 192, bandwidthGBs: 800, reservePct: 5, overheadGB: 1 },
+    };
+    const qs = encodeState(s);
+    expect(qs).not.toContain('awl');
+    expect(decodeState(qs, fallback)).toEqual(s);
+  });
+
   it('bad input → fallback', () => {
     expect(decodeState('', fallback)).toBe(fallback);
     expect(decodeState('garbage', fallback)).toBe(fallback);

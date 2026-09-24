@@ -95,6 +95,8 @@ export interface HardwareSpec {
   reservePct: number;
   /** Runtime/CUDA-context overhead per GPU in GB (default 1). */
   overheadGB: number;
+  /** Apple GPU wired memory limit per GPU in GB (only applies to Apple GPUs). Optional; when omitted, the default OS limit is applied. */
+  appleWiredLimitGB?: number;
 }
 
 export interface Workload {
