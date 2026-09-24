@@ -640,6 +640,6 @@ describe('Tabs (#21)', () => {
     await user.click(screen.getByRole('button', { name: 'Clear planner' }));
     await user.click(screen.getByRole('tab', { name: 'Calculator' }));
     const calcPanel = document.getElementById('tabpanel-calculator')!;
-    expect(within(calcPanel).queryByRole('status')).not.toBeInTheDocument();
+    expect(within(calcPanel).queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
   });
 });
