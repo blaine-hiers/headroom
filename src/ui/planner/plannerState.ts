@@ -21,7 +21,8 @@ export const initialPlannerState: PlannerState = {};
 
 export type PlannerAction =
   | { type: 'setHandoffModelId'; modelId: string | undefined }
-  | { type: 'clear' };
+  | { type: 'clear' }
+  | { type: 'restore'; state: PlannerState };
 
 export function plannerReducer(state: PlannerState, action: PlannerAction): PlannerState {
   switch (action.type) {
@@ -34,5 +35,7 @@ export function plannerReducer(state: PlannerState, action: PlannerAction): Plan
     }
     case 'clear':
       return {};
+    case 'restore':
+      return action.state;
   }
 }

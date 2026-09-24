@@ -222,6 +222,15 @@ input[type='number'] {
   border-bottom-color: var(--accent);
 }
 
+/* ---------- calculator toolbar ---------- */
+
+.calculator-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 0;
+}
+
 /* ---------- planner ---------- */
 
 .planner {
@@ -234,6 +243,20 @@ input[type='number'] {
   justify-content: flex-end;
   gap: 8px;
   min-height: 34px;
+}
+
+/* ---------- undo notice ---------- */
+
+.undo-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
 }
 
 /* ---------- buttons ---------- */

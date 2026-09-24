@@ -228,3 +228,45 @@ describe('reducer: loadPartial (openInCalculator handoff)', () => {
     expect(s.quant.weight).not.toBeUndefined();
   });
 });
+
+describe('reducer: reset (#26 Clear button)', () => {
+  it('returns exactly the defaultState', () => {
+    const modified = reducer(defaultState, { type: 'hardware', patch: { gpuName: 'H100 SXM', gpuCount: 2 } });
+    const cleared = reducer(modified, { type: 'reset' });
+    expect(cleared).toEqual(defaultState);
+  });
+
+  it('resets all state slices to defaults after multiple changes', () => {
+    let s = defaultState;
+    s = reducer(s, { type: 'hardware', patch: { gpuCount: 4 } });
+    s = reducer(s, { type: 'workload', patch: { contextTokens: 32768, concurrentUsers: 10 } });
+    s = reducer(s, { type: 'quant', patch: { weight: 'q4_k_m' } });
+    s = reducer(s, { type: 'runtime', runtime: 'vllm' });
+
+    const cleared = reducer(s, { type: 'reset' });
+    expect(cleared).toEqual(defaultState);
+  });
+});
+
+describe('reducer: restore (#26 Undo)', () => {
+  it('restores the exact saved state including speculative config', () => {
+    // Enable speculative decoding
+    let s = reducer(defaultState, { type: 'speculative', patch: { k: 5, alpha: 0.7, draftModel: preset('Llama 3.1 8B') } });
+    s = reducer(s, { type: 'hardware', patch: { gpuCount: 2 } });
+
+    // Save the state with speculative
+    const savedState = s;
+
+    // Make more changes
+    let modified = reducer(s, { type: 'speculative', patch: { k: 3 } });
+    modified = reducer(modified, { type: 'hardware', patch: { gpuCount: 4 } });
+
+    // Restore the exact saved state
+    const restored = reducer(modified, { type: 'restore', state: savedState });
+
+    // Should match exactly, including speculative
+    expect(restored).toEqual(savedState);
+    expect(restored.speculative).toEqual(savedState.speculative);
+    expect(restored.hardware.gpuCount).toBe(2);
+  });
+});

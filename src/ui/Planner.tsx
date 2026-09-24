@@ -9,6 +9,9 @@ interface Props {
   dispatch: Dispatch<PlannerAction>;
   /** Loads a partial config into the Calculator's primary column and switches to it. */
   openInCalculator: (patch: OpenInCalculatorPatch) => void;
+  onClear?: () => void;
+  showUndo?: boolean;
+  onUndo?: () => void;
 }
 
 /**
@@ -17,10 +20,22 @@ interface Props {
  * without touching this file or each other. `.planner-toolbar` is the obvious slot #26's Clear
  * button goes in.
  */
-export function Planner({ planner, dispatch, openInCalculator }: Props) {
+export function Planner({ planner, dispatch, openInCalculator, onClear, showUndo, onUndo }: Props) {
   return (
     <div className="planner">
-      <div className="planner-toolbar" />
+      {showUndo && onUndo && (
+        <div className="undo-notice" role="status">
+          <span className="muted">Cleared · </span>
+          <button className="link-btn" onClick={onUndo}>
+            Undo
+          </button>
+        </div>
+      )}
+      <div className="planner-toolbar">
+        <button className="btn" onClick={onClear} aria-label="Clear planner">
+          Clear
+        </button>
+      </div>
       <TaskPicker planner={planner} dispatch={dispatch} openInCalculator={openInCalculator} />
       <HardwareSizing planner={planner} dispatch={dispatch} openInCalculator={openInCalculator} />
     </div>
