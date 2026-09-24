@@ -2,6 +2,7 @@ import { useId, useRef, useState } from 'react';
 import { activeParamsDetailed, fetchRepo, findModelPreset, formatBytes, MODEL_PRESETS } from '../lib';
 import type { Attention, GgufOption, ModelSpec, MoeSpec, NativeDtype } from '../lib';
 import { NumberField } from './NumberField';
+import { RepoSearch } from './RepoSearch';
 import { readStorage, TOKEN_KEY, writeStorage } from './storage';
 import { getRecents, addRecent, removeRecent, clearRecents } from './recents';
 
@@ -24,14 +25,13 @@ const BIG = 1e7;
 export function ModelPanel({ model, onLoad, onEdit }: Props) {
   const inputId = useId();
   const tokenId = useId();
-  const [repoId, setRepoId] = useState(model.id);
   const [token, setToken] = useState(() => readStorage(TOKEN_KEY) ?? '');
   const [fetchState, setFetchState] = useState<FetchState>({ kind: 'idle' });
   const [recents, setRecents] = useState(() => getRecents());
   const [gguf, setGguf] = useState<{ id: string; options: GgufOption[]; selected: string } | undefined>(undefined);
   const requestSeq = useRef(0);
 
-  const doFetch = async (ggufPath?: string, repo: string = repoId) => {
+  const doFetch = async (repo: string, ggufPath?: string) => {
     const id = repo.trim();
     const seq = ++requestSeq.current;
     setFetchState({ kind: 'fetching', id });
@@ -39,7 +39,6 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
     if (seq !== requestSeq.current) return; // a newer fetch or preset pick superseded this one
     if (res.ok) {
       setFetchState(res.note ? { kind: 'idle', note: res.note } : { kind: 'idle' });
-      setRepoId(res.spec.id);
       addRecent(res.spec);
       setRecents(getRecents());
       setGguf(res.gguf && { id: res.spec.id, ...res.gguf });
@@ -53,7 +52,6 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
     requestSeq.current++;
     setFetchState({ kind: 'idle' });
     setGguf(undefined);
-    setRepoId(spec.id);
     addRecent(spec);
     setRecents(getRecents());
     onLoad(spec);
@@ -69,29 +67,15 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
   return (
     <section className="panel" aria-labelledby="model-h">
       <h2 id="model-h">Model</h2>
-      <div className="field">
-        <label htmlFor={inputId}>Hugging Face repo id</label>
-        <div className="row">
-          <input
-            id={inputId}
-            type="text"
-            placeholder="org/model"
-            spellCheck={false}
-            autoComplete="off"
-            value={repoId}
-            onChange={(e) => setRepoId(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                void doFetch();
-              }
-            }}
-          />
-          <button type="button" className="btn btn-primary" onClick={() => void doFetch()} disabled={fetchState.kind === 'fetching'}>
-            Fetch
-          </button>
-        </div>
-      </div>
+      <RepoSearch
+        value={model.id}
+        presets={MODEL_PRESETS}
+        token={token || undefined}
+        fetching={fetchState.kind === 'fetching'}
+        onSubmit={(id) => void doFetch(id)}
+        onSelectPreset={pickPreset}
+        onSelectHub={(id) => void doFetch(id)}
+      />
 
       {gguf && (
         <div className="field">
@@ -100,7 +84,7 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
             id={`${inputId}-gguf`}
             value={gguf.selected}
             disabled={fetchState.kind === 'fetching'}
-            onChange={(e) => void doFetch(e.target.value, gguf.id)}
+            onChange={(e) => void doFetch(gguf.id, e.target.value)}
           >
             {gguf.options.map((o) => (
               <option key={o.path} value={o.path} title={o.path}>
