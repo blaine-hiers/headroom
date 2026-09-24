@@ -9,6 +9,7 @@ Headroom is a local-LLM VRAM and KV-cache calculator. Give it a Hugging Face rep
 - total VRAM for N concurrent users, compared with usable VRAM
 - the most users that fit at your context, and the longest context that fits for your users
 - a bandwidth-bound decode-speed estimate
+- reverse hardware search: which bundled GPU presets and counts fit your current model, quant and workload (*Which hardware fits?*)
 
 It runs entirely in the browser. There is no backend and no account. The whole calculator state lives in the URL, so you can share a link to it.
 
