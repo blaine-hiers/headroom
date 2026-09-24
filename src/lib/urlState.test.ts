@@ -93,6 +93,21 @@ describe('urlState', () => {
     expect(decoded.hardware.appleWiredLimitGB).toBe(120);
   });
 
+  it('round-trips the offload spec (#7)', () => {
+    const s: CalcState = {
+      ...fallback,
+      hardware: { ...fallback.hardware, offload: { enabled: true, systemRamGB: 64, ramBandwidthGBs: 90 } },
+    };
+    expect(decodeState(encodeState(s), fallback)).toEqual(s);
+  });
+
+  it('an old link with no offload keys decodes with offload left undefined (unchanged behavior)', () => {
+    const qs = encodeState(fallback);
+    expect(qs).not.toContain('oe=');
+    const decoded = decodeState(qs, fallback);
+    expect(decoded.hardware.offload).toBeUndefined();
+  });
+
   it('bad input → fallback', () => {
     expect(decodeState('', fallback)).toBe(fallback);
     expect(decodeState('garbage', fallback)).toBe(fallback);

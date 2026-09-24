@@ -4,6 +4,7 @@ export * from './kvcache';
 export * from './weights';
 export * from './fit';
 export * from './throughput';
+export * from './offload';
 export * from './tensorParallel';
 export * from './format';
 export * from './hf';

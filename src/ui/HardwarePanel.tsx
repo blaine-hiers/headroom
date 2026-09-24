@@ -2,6 +2,7 @@ import { useId } from 'react';
 import { GPU_PRESETS, findGpuPreset } from '../lib';
 import type { GpuVendor, HardwareSpec } from '../lib';
 import { NumberField, Stepper } from './NumberField';
+import { OffloadFields } from './OffloadFields';
 import { MAX_GPUS } from './state';
 
 const VENDORS: Array<{ vendor: GpuVendor; label: string }> = [
@@ -117,6 +118,7 @@ export function HardwarePanel({ hardware, onChange }: Props) {
           </div>
         </details>
       )}
+      <OffloadFields hardware={hardware} onChange={onChange} />
     </section>
   );
 }

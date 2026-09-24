@@ -2,6 +2,7 @@ import {
   activeParamsDetailed,
   CUSTOM_GPU_NAME,
   decodeState,
+  DEFAULT_OFFLOAD,
   defaultWeightQuantFor,
   findGpuPreset,
   findModelPreset,
@@ -30,6 +31,7 @@ export const defaultState: CalcState = {
     bandwidthGBs: DEFAULT_GPU?.bandwidthGBs ?? 1008,
     reservePct: 5,
     overheadGB: 1,
+    offload: DEFAULT_OFFLOAD,
   },
   workload: { contextTokens: 8192, concurrentUsers: 1 },
 };
@@ -165,12 +167,17 @@ export function initialState(search: string): CalcState {
       bandwidthGBs: clamp(hw.bandwidthGBs, 1, 100000),
       reservePct: clamp(hw.reservePct, 0, 50),
       overheadGB: clamp(hw.overheadGB, 0, 8),
+      offload: hw.offload && {
+        enabled: hw.offload.enabled,
+        systemRamGB: clamp(hw.offload.systemRamGB, 0.1, 8192),
+        ramBandwidthGBs: clamp(hw.offload.ramBandwidthGBs, 1, 2000),
+      },
     },
     workload: clampWorkload(s.workload, model),
   };
 }
 
-export type FitLevel = 'fits' | 'tight' | 'nofit';
+export type FitLevel = 'fits' | 'tight' | 'nofit' | 'offloaded';
 
 /** Tight = fits with under 10% of usable VRAM left over. */
 export function fitLevel(fits: boolean, headroomBytes: number, usableBytes: number): FitLevel {

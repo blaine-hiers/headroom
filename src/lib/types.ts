@@ -134,6 +134,36 @@ export interface HardwareSpec {
   overheadGB: number;
   /** Apple GPU wired memory limit per GPU in GB (only applies to Apple GPUs). Optional; when omitted, the default OS limit is applied. */
   appleWiredLimitGB?: number;
+  /** CPU/RAM layer offload (llama.cpp's -ngl). Optional and off by default; see offload.ts. */
+  offload?: OffloadSpec;
+}
+
+/**
+ * System-RAM offload for the model layers that don't fit in VRAM, like llama.cpp's `-ngl`.
+ * Off by default — today's fit/throughput numbers are unchanged unless `enabled` is true.
+ */
+export interface OffloadSpec {
+  enabled: boolean;
+  /** Total system RAM, GB. */
+  systemRamGB: number;
+  /** System RAM bandwidth, GB/s (e.g. ~50 DDR4 dual-channel, ~80-100 DDR5 dual-channel). */
+  ramBandwidthGBs: number;
+}
+
+/** Result of splitting a model's layers between GPU and system RAM (see offload.ts's planOffload). */
+export interface OffloadPlan {
+  /** Layers placed on the GPU — llama.cpp's -ngl value. */
+  gpuLayers: number;
+  /** Layers left to run from system RAM. */
+  cpuLayers: number;
+  /** weightBytes / numLayers — the approximation used to decide the split. */
+  bytesPerLayer: number;
+  /** Weight bytes placed on the GPU. */
+  gpuWeightBytes: number;
+  /** Weight bytes placed in system RAM. */
+  cpuWeightBytes: number;
+  /** True when cpuWeightBytes fits in systemRamGB. Always true when offload is disabled or nothing is offloaded. */
+  fitsInRam: boolean;
 }
 
 export interface Workload {
@@ -169,4 +199,6 @@ export interface CalcResult {
   throughput: { perUserTokS: number; aggregateTokS: number; efficiency: number };
   /** Tensor-parallel split check for hardware.gpuCount (see tensorParallel.ts). */
   tensorParallel: TensorParallelCheck;
+  /** CPU/RAM layer split (see offload.ts). Always present; a no-op split (all layers on GPU) when offload is disabled. */
+  offload: OffloadPlan;
 }

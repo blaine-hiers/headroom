@@ -1,3 +1,4 @@
+import { resolveOffload } from './offload';
 import { KV_QUANTS, WEIGHT_QUANTS } from './quant';
 import type {
   Attention,
@@ -40,6 +41,9 @@ const K = {
   reservePct: 'rp',
   overheadGB: 'oh',
   appleWiredLimitGB: 'awl',
+  offloadEnabled: 'oe',
+  systemRamGB: 'oram',
+  ramBandwidthGBs: 'obw',
   contextTokens: 'c',
   concurrentUsers: 'u',
 } as const;
@@ -84,6 +88,11 @@ export function encodeState(state: CalcState): string {
   set(K.reservePct, h.reservePct);
   set(K.overheadGB, h.overheadGB);
   set(K.appleWiredLimitGB, h.appleWiredLimitGB);
+  if (h.offload) {
+    set(K.offloadEnabled, h.offload.enabled ? 1 : 0);
+    set(K.systemRamGB, h.offload.systemRamGB);
+    set(K.ramBandwidthGBs, h.offload.ramBandwidthGBs);
+  }
   set(K.contextTokens, state.workload.contextTokens);
   set(K.concurrentUsers, state.workload.concurrentUsers);
   return q.toString();
@@ -197,6 +206,15 @@ export function decodeState(qs: string, fallback: CalcState): CalcState {
         };
         const appleWiredLimit = optNum(K.appleWiredLimitGB);
         if (appleWiredLimit !== undefined) (hw as any).appleWiredLimitGB = appleWiredLimit;
+        // Old shared links never had these keys; resolveOffload's disabled default fills the gap.
+        if (q.has(K.offloadEnabled) || q.has(K.systemRamGB) || q.has(K.ramBandwidthGBs)) {
+          const offloadDefault = resolveOffload(undefined);
+          (hw as any).offload = {
+            enabled: q.get(K.offloadEnabled) === '1',
+            systemRamGB: optNum(K.systemRamGB) ?? offloadDefault.systemRamGB,
+            ramBandwidthGBs: optNum(K.ramBandwidthGBs) ?? offloadDefault.ramBandwidthGBs,
+          };
+        }
         return hw;
       })(),
       workload: {

@@ -280,3 +280,60 @@ describe('calculate', () => {
     expect(calculate(state({ model: moe })).weightBytes).toBe(60e9); // all experts resident
   });
 });
+
+describe('CPU/RAM offload (#7)', () => {
+  it('offload off (no offload field): every number matches a pre-offload calculation bit-for-bit', () => {
+    const model = makeSpec({ params: 200e9 }); // too big for a single 24 GB GPU, on purpose
+    const rtx4090: HardwareSpec = { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, reservePct: 5, overheadGB: 1 };
+    const withoutField = calculate(state({ model, hardware: rtx4090 }));
+    const withDisabled = calculate(
+      state({ model, hardware: { ...rtx4090, offload: { enabled: false, systemRamGB: 64, ramBandwidthGBs: 50 } } }),
+    );
+    expect(withDisabled.fits).toBe(withoutField.fits);
+    expect(withDisabled.headroomBytes).toBe(withoutField.headroomBytes);
+    expect(withDisabled.totalBytes).toBe(withoutField.totalBytes);
+    expect(withDisabled.throughput).toEqual(withoutField.throughput);
+    expect(withDisabled.throughput.perUserTokS).toBe(withoutField.throughput.perUserTokS);
+    // The offload plan is a no-op split (everything on the GPU) when disabled.
+    expect(withoutField.offload.gpuLayers).toBe(model.numLayers);
+    expect(withoutField.offload.cpuLayers).toBe(0);
+  });
+
+  it('offload on: a 70B Q4 model that does not fit on one 24 GB GPU offloads layers to RAM and still reports a throughput', () => {
+    const model = makeSpec(); // Llama 3 70B defaults
+    const rtx4090: HardwareSpec = {
+      gpuName: 'RTX 4090',
+      gpuCount: 1,
+      vramGB: 24,
+      bandwidthGBs: 1008,
+      reservePct: 5,
+      overheadGB: 1,
+      offload: { enabled: true, systemRamGB: 64, ramBandwidthGBs: 50 },
+    };
+    const r = calculate(
+      state({ model, quant: { weight: 'q4_k_m', kv: 'fp16' }, hardware: rtx4090, workload: { contextTokens: 2048, concurrentUsers: 1 } }),
+    );
+    expect(r.offload.cpuLayers).toBeGreaterThan(0);
+    expect(r.offload.gpuLayers).toBeLessThan(model.numLayers);
+    expect(r.offload.fitsInRam).toBe(true);
+    expect(r.throughput.perUserTokS).toBeGreaterThan(0);
+    // Weights alone (~42.8 GB at Q4_K_M) still don't fit the GPU's ~21.8 GB usable on their own, offload or not.
+    expect(r.fits).toBe(false);
+  });
+
+  it('offload on: does not fit even with RAM when system RAM is too small', () => {
+    const model = makeSpec();
+    const rtx4090: HardwareSpec = {
+      gpuName: 'RTX 4090',
+      gpuCount: 1,
+      vramGB: 24,
+      bandwidthGBs: 1008,
+      reservePct: 5,
+      overheadGB: 1,
+      offload: { enabled: true, systemRamGB: 1, ramBandwidthGBs: 50 },
+    };
+    const r = calculate(state({ model, hardware: rtx4090, workload: { contextTokens: 2048, concurrentUsers: 1 } }));
+    expect(r.offload.cpuLayers).toBeGreaterThan(0);
+    expect(r.offload.fitsInRam).toBe(false);
+  });
+});

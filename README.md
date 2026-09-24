@@ -106,6 +106,13 @@ All sizes are in bytes.
 - per-user tok/s = `stepsPerSec`; aggregate tok/s = `stepsPerSec × N`
 - Prefill (time to first token) is compute-bound and is not estimated.
 
+**CPU/RAM offload** (`src/lib/offload.ts`), like llama.cpp's `-ngl`. Off by default under the Hardware panel's *Offload* disclosure — every number above is unchanged unless it's turned on. KV cache always stays on the GPU (llama.cpp's default); only weights are split.
+- `bytesPerLayer ≈ weights / numLayers`, spreading the embeddings/LM head evenly across the layer count rather than placing them structurally — an approximation, like the rest of this calculator.
+- `gpuLayers = clamp(floor((usable − overhead − kvForAllUsers) / bytesPerLayer), 0, numLayers)` — llama.cpp's `-ngl`. The rest, `cpuLayers = numLayers − gpuLayers`, run from system RAM.
+- `cpuWeightBytes = weights − gpuLayers × bytesPerLayer` must be `≤ systemRamGB × 1e9`, or the model doesn't fit even with RAM offload. The fit badge gets a fourth state, **Offloaded**, distinct from Fits/Does not fit, shown once any layers actually move to RAM and the rest fits.
+- Decode throughput splits into a GPU term and a RAM term, each with its own bandwidth and efficiency: `time = (gpuActiveWeightBytes + N × kvPerRequest) / (bandwidthGBs × 1e9 × gpuCount × efficiency) + cpuActiveWeightBytes / (ramBandwidthGBs × 1e9 × 0.7)`, `stepsPerSec = 1 / time`. The active weight bytes are split GPU/RAM in the same `gpuLayers / numLayers` proportion as the static weights; the GPU term reuses the exact efficiency (including the tensor-parallel penalty) from the plain decode estimate above, and the RAM term uses the same base `0.7` decode efficiency (no tensor-parallel penalty — that's GPU-to-GPU communication, not RAM).
+- System RAM bandwidth has a small bundled preset list: DDR4 dual-channel ~50 GB/s, DDR5 dual-channel ~80–100 GB/s. Apple GPUs have no separate system RAM to offload to — it's unified with the GPU already — so the preset there is n/a; use the GPU's own bandwidth.
+
 ## Where the model data comes from
 
 For a repo id, Headroom makes two requests straight from your browser. The Hub sends CORS headers, so no proxy is needed.

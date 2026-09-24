@@ -1,12 +1,15 @@
 import type { ReactNode } from 'react';
 import {
   attentionParamsPerLayer,
+  DECODE_EFFICIENCY,
   effectiveSlidingLayers,
   effectiveVramGB,
   findGpuPreset,
   formatNumber,
   KV_QUANTS,
   kvBytesPerTokenPerLayer,
+  resolveOffload,
+  splitByLayerFraction,
   TP_PENALTY_PER_DOUBLING,
   WEIGHT_QUANTS,
   weightBytes,
@@ -88,6 +91,11 @@ export function ShowTheMath({ state, result }: Props) {
   const isAppleGpu = gpu?.vendor === 'apple';
   const effectiveVram = effectiveVramGB(hw.gpuName, hw.vramGB, hw.appleWiredLimitGB);
   const appleNote = isAppleGpu && hw.vramGB !== effectiveVram ? ` (using wired limit ${n(effectiveVram, 2)} GB)` : '';
+
+  const offload = resolveOffload(hw.offload);
+  const offloadPlan = result.offload;
+  const activeSplit = splitByLayerFraction(activeBytes, offloadPlan.gpuLayers, model.numLayers);
+  const gpuAvailable = result.usableBytes - result.overheadBytes - result.kvBytesAllUsers;
 
   return (
     <details className="card math">
@@ -189,10 +197,50 @@ export function ShowTheMath({ state, result }: Props) {
           }
           result={`${n(result.throughput.perUserTokS, 1)} tok/s per user, ${n(result.throughput.aggregateTokS, 1)} tok/s aggregate`}
         />
+        {offload.enabled && (
+          <>
+            <Step
+              title="Offload: bytes per layer"
+              formula="weights / numLayers"
+              sub={`${n(result.weightBytes)} / ${n(model.numLayers)}`}
+              result={B(offloadPlan.bytesPerLayer)}
+            />
+            <Step
+              title="Offload: GPU bytes available for weights"
+              formula="usable − overhead − KV for all users"
+              sub={`${n(result.usableBytes)} − ${n(result.overheadBytes)} − ${n(result.kvBytesAllUsers)}`}
+              result={B(Math.max(0, gpuAvailable))}
+            />
+            <Step
+              title="Offload: layers on GPU (-ngl)"
+              formula="clamp(floor(available / bytesPerLayer), 0, numLayers)"
+              sub={`floor(${n(gpuAvailable)} / ${n(offloadPlan.bytesPerLayer)})`}
+              result={`${n(offloadPlan.gpuLayers)} of ${n(model.numLayers)} on GPU, ${n(offloadPlan.cpuLayers)} in RAM`}
+            />
+            <Step
+              title="Offload: fits in system RAM?"
+              formula="cpuWeightBytes ≤ systemRamGB × 1e9"
+              sub={`${n(offloadPlan.cpuWeightBytes)} ≤ ${n(offload.systemRamGB)} × 1e9`}
+              result={offloadPlan.fitsInRam ? 'yes' : 'no'}
+            />
+            <Step
+              title="Offload: decode throughput"
+              formula="1 / ((gpuActive + N×KV) / gpuBandwidth + cpuActive / ramBandwidth)"
+              sub={
+                <>
+                  1 / (({n(activeSplit.gpu)} + {n(N)} × {n(result.kvBytesPerRequest)}) / ({n(hw.bandwidthGBs)} × 1e9 ×{' '}
+                  {n(hw.gpuCount)} × {n(result.throughput.efficiency, 3)}) + {n(activeSplit.cpu)} / ({n(offload.ramBandwidthGBs)} × 1e9 × {n(DECODE_EFFICIENCY, 2)}))
+                </>
+              }
+              result={`${n(result.throughput.perUserTokS, 1)} tok/s per user, ${n(result.throughput.aggregateTokS, 1)} tok/s aggregate`}
+            />
+          </>
+        )}
       </ol>
       {hw.gpuCount > 1 && (
         <p className="help">Multi-GPU numbers assume tensor-parallel bandwidth pooling and ignore all-reduce communication cost beyond this penalty.</p>
       )}
+      {offload.enabled && <p className="help">KV cache always stays on the GPU (llama.cpp's default) — only weights are split between GPU and RAM.</p>}
     </details>
   );
 }

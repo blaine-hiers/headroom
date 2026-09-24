@@ -1,4 +1,5 @@
 import { kvBytesForContext, kvBytesPerToken } from './kvcache';
+import { offloadDecodeThroughput, planOffload, resolveOffload, splitByLayerFraction } from './offload';
 import { checkTensorParallelSplit, tensorParallelEfficiency } from './tensorParallel';
 import { DECODE_EFFICIENCY, decodeThroughput } from './throughput';
 import type { CalcResult, CalcState, HardwareSpec } from './types';
@@ -109,6 +110,30 @@ export function calculate(state: CalcState): CalcResult {
     efficiency: DECODE_EFFICIENCY * tensorParallelEfficiency(hardware.gpuCount),
   });
 
+  // CPU/RAM layer offload (llama.cpp's -ngl): off unless hardware.offload.enabled (see offload.ts).
+  // KV stays on the GPU (llama.cpp's default), so only weight bytes are split here.
+  const offloadSpec = resolveOffload(hardware.offload);
+  const offload = planOffload({
+    weightBytes: weights,
+    numLayers: model.numLayers,
+    usableGpuBytes: usable - overhead - allUsers,
+    offload: offloadSpec,
+  });
+  // Left untouched (same object, not recomputed) when offload is off, so throughput stays bit-identical.
+  const activeSplit = splitByLayerFraction(activeWeightBytes, offload.gpuLayers, model.numLayers);
+  const offloadThroughput = offloadSpec.enabled
+    ? offloadDecodeThroughput({
+        gpuActiveWeightBytes: activeSplit.gpu,
+        cpuActiveWeightBytes: activeSplit.cpu,
+        kvBytesPerRequest: perRequest,
+        concurrentUsers: users,
+        bandwidthGBs: hardware.bandwidthGBs,
+        gpuCount: hardware.gpuCount,
+        ramBandwidthGBs: offloadSpec.ramBandwidthGBs,
+        gpuEfficiency: DECODE_EFFICIENCY * tensorParallelEfficiency(hardware.gpuCount),
+      })
+    : throughput;
+
   return {
     kvBytesPerToken: perToken,
     kvBytesPerRequest: perRequest,
@@ -124,7 +149,8 @@ export function calculate(state: CalcState): CalcResult {
     maxUsersAtContext: maxUsers(usable, fixed, perRequest),
     maxContextForUsers: maxContext(usable, fixed, users, perToken, model.maxPositionEmbeddings),
     contextTable,
-    throughput,
+    throughput: offloadThroughput,
     tensorParallel,
+    offload,
   };
 }
