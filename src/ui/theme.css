@@ -413,6 +413,35 @@ input[type='range'] {
   background: var(--chosen-bg);
 }
 
+.chip-with-remove {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin: 0;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: bold;
+  line-height: 1;
+}
+
+.chip-remove:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+
 .status {
   font-size: 13px;
   min-height: 20px;

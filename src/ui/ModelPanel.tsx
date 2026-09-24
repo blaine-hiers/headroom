@@ -3,6 +3,7 @@ import { activeParamsDetailed, fetchModel, findModelPreset, MODEL_PRESETS } from
 import type { Attention, ModelSpec, MoeSpec, NativeDtype } from '../lib';
 import { NumberField } from './NumberField';
 import { readStorage, TOKEN_KEY, writeStorage } from './storage';
+import { getRecents, addRecent, removeRecent, clearRecents } from './recents';
 
 interface Props {
   model: ModelSpec;
@@ -26,6 +27,7 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
   const [repoId, setRepoId] = useState(model.id);
   const [token, setToken] = useState(() => readStorage(TOKEN_KEY) ?? '');
   const [fetchState, setFetchState] = useState<FetchState>({ kind: 'idle' });
+  const [recents, setRecents] = useState(() => getRecents());
   const requestSeq = useRef(0);
 
   const doFetch = async () => {
@@ -37,6 +39,8 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
     if (res.ok) {
       setFetchState({ kind: 'idle' });
       setRepoId(res.spec.id);
+      addRecent(res.spec);
+      setRecents(getRecents());
       onLoad(res.spec);
     } else {
       setFetchState({ kind: 'error', id, error: res.error });
@@ -47,6 +51,8 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
     requestSeq.current++;
     setFetchState({ kind: 'idle' });
     setRepoId(spec.id);
+    addRecent(spec);
+    setRecents(getRecents());
     onLoad(spec);
   };
 
@@ -97,6 +103,44 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
           </button>
         ))}
       </div>
+
+      {recents.length > 0 && (
+        <div className="chips" role="group" aria-label="Recent models">
+          {recents.map((r) => (
+            <div key={r.id} className="chip-with-remove">
+              <button
+                type="button"
+                className="chip"
+                aria-pressed={model.id === r.id}
+                onClick={() => pickPreset(r)}
+              >
+                {r.name}
+              </button>
+              <button
+                type="button"
+                className="chip-remove"
+                aria-label={`Remove ${r.name} from recent`}
+                onClick={() => {
+                  removeRecent(r.id);
+                  setRecents(getRecents());
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => {
+              clearRecents();
+              setRecents([]);
+            }}
+          >
+            Clear recent
+          </button>
+        </div>
+      )}
 
       <p className={`status status-${fetchState.kind}`} aria-live="polite" role="status">
         {fetchState.kind === 'fetching' && <>Fetching {fetchState.id}…</>}
