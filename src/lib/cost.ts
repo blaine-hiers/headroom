@@ -1,4 +1,5 @@
-import { decodeThroughput } from './throughput';
+import { calculate } from './fit';
+import type { CalcResult, CalcState } from './types';
 
 /** costPerHour = usdPerHour × gpuCount. */
 export function costPerHour(usdPerHour: number, gpuCount: number): number {
@@ -14,22 +15,23 @@ export function usdPerMillionOutputTokens(costPerHourValue: number, aggregateTok
   return (costPerHourValue / (aggregateTokS * 3600)) * 1e6;
 }
 
+/**
+ * The one aggregate decode rate cost is priced against: the speculative aggregate when
+ * speculative decoding is on, otherwise CalcResult.throughput (which is already offload-aware,
+ * and 0 when an offloaded split doesn't run).
+ */
+export function effectiveAggregateTokS(result: Pick<CalcResult, 'throughput' | 'speculative'>): number {
+  return result.speculative.enabled ? result.speculative.throughput.aggregateTokS : result.throughput.aggregateTokS;
+}
+
 export interface CloudCostInput {
   /** Blank/undefined hides the cost card — most GPUs and every custom entry start this way. */
   usdPerHour: number | undefined;
   gpuCount: number;
-  /** Per GPU, GB/s (HardwareSpec.bandwidthGBs). */
-  bandwidthGBs: number;
-  /** Weight bytes read per decode step (CalcResult.activeWeightBytes). */
-  activeWeightBytes: number;
-  /** KV bytes per request at the chosen context (CalcResult.kvBytesPerRequest). */
-  kvBytesPerRequest: number;
-  /** Decode efficiency, already scaled for the tensor-parallel penalty (CalcResult.throughput.efficiency). */
-  efficiency: number;
-  /** Aggregate decode tok/s at the chosen concurrent-user count (CalcResult.throughput.aggregateTokS). */
+  /** effectiveAggregateTokS at the chosen concurrent-user count. */
   aggregateTokS: number;
-  /** Most concurrent users this hardware fits at the chosen context (CalcResult.maxUsersAtContext). */
-  maxUsersAtContext: number;
+  /** effectiveAggregateTokS at maxUsersAtContext; undefined when there is no finite, positive max. */
+  aggregateTokSAtMaxUsers: number | undefined;
 }
 
 export interface CloudCost {
@@ -45,19 +47,28 @@ export function calculateCloudCost(input: CloudCostInput): CloudCost | undefined
   if (input.usdPerHour === undefined || !(input.usdPerHour > 0)) return undefined;
   const cph = costPerHour(input.usdPerHour, input.gpuCount);
   const atCurrentUsers = usdPerMillionOutputTokens(cph, input.aggregateTokS);
-
-  let atMaxUsers: number | undefined;
-  if (Number.isFinite(input.maxUsersAtContext) && input.maxUsersAtContext > 0) {
-    const best = decodeThroughput({
-      activeWeightBytes: input.activeWeightBytes,
-      kvBytesPerRequest: input.kvBytesPerRequest,
-      concurrentUsers: input.maxUsersAtContext,
-      bandwidthGBs: input.bandwidthGBs,
-      gpuCount: input.gpuCount,
-      efficiency: input.efficiency,
-    });
-    atMaxUsers = usdPerMillionOutputTokens(cph, best.aggregateTokS);
-  }
-
+  const atMaxUsers = input.aggregateTokSAtMaxUsers === undefined ? undefined : usdPerMillionOutputTokens(cph, input.aggregateTokSAtMaxUsers);
   return { costPerHour: cph, atCurrentUsers, atMaxUsers };
+}
+
+/**
+ * Cloud cost for a state and its computed result. Both figures come from the same throughput
+ * model calculate() uses (offload split, speculative speedup, tensor-parallel penalty): the
+ * max-users figure re-runs calculate() with concurrentUsers = maxUsersAtContext and reads its
+ * effectiveAggregateTokS, rather than re-deriving a pure-GPU decode estimate.
+ */
+export function cloudCostFor(state: CalcState, result: CalcResult): CloudCost | undefined {
+  const usdPerHour = state.hardware.usdPerHour;
+  if (usdPerHour === undefined || !(usdPerHour > 0)) return undefined;
+  const maxU = result.maxUsersAtContext;
+  const aggregateTokSAtMaxUsers =
+    Number.isFinite(maxU) && maxU > 0
+      ? effectiveAggregateTokS(calculate({ ...state, workload: { ...state.workload, concurrentUsers: maxU } }))
+      : undefined;
+  return calculateCloudCost({
+    usdPerHour,
+    gpuCount: state.hardware.gpuCount,
+    aggregateTokS: effectiveAggregateTokS(result),
+    aggregateTokSAtMaxUsers,
+  });
 }

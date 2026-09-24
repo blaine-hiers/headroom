@@ -443,9 +443,11 @@ describe('CPU/RAM offload (#7)', () => {
     expect(r.offload.cpuLayers).toBe(41);
     expect(r.throughput.perUserTokS).toBeCloseTo(1.52, 2);
     // Capacity math must agree with the "Offloaded" badge, not the un-split "does not fit":
-    // the GPU-resident weights (not the full 42.8 GB) are what's fixed once offload is on.
+    // with 64 GB of RAM every weight layer can spill, so only overhead is fixed on the GPU.
     expect(r.maxUsersAtContext).toBeGreaterThanOrEqual(1);
-    expect(r.fixedBytes).toBe(r.offload.gpuWeightBytes + r.overheadBytes);
+    expect(r.fixedBytes).toBe(r.overheadBytes);
+    expect(r.runs).toBe(true);
+    expect(r.runHeadroomBytes).toBe(r.usableBytes - (r.fixedBytes + r.bytesPerUser));
     expect(r.bytesPerUser).toBe(r.kvBytesPerRequest);
     // What Chart.tsx plots for "current users" must actually clear usable VRAM (a green marker),
     // matching the Offloaded (not does-not-fit) badge.
@@ -487,6 +489,138 @@ describe('CPU/RAM offload (#7)', () => {
     // A configuration that doesn't actually run must not present a throughput as achievable.
     expect(r.throughput.perUserTokS).toBe(0);
     expect(r.throughput.aggregateTokS).toBe(0);
+  });
+});
+
+describe('offload capacity: maxUsers/maxContext are the largest N/C that still run (#20)', () => {
+  const model = makeSpec(); // Llama 3 70B
+  const rtx4090 = (systemRamGB: number, enabled = true): HardwareSpec => ({
+    gpuName: 'RTX 4090',
+    gpuCount: 1,
+    vramGB: 24,
+    bandwidthGBs: 1008,
+    tflopsBf16: 100,
+    reservePct: 5,
+    overheadGB: 1,
+    offload: { enabled, systemRamGB, ramBandwidthGBs: 50 },
+  });
+  const run = (hardware: HardwareSpec, contextTokens: number, concurrentUsers: number, overrides: Partial<CalcState> = {}) =>
+    calculate(state({ model, quant: { weight: 'q4_k_m', kv: 'fp16' }, hardware, workload: { contextTokens, concurrentUsers }, ...overrides }));
+
+  it('70B Q4 on one 4090 + 64 GB: maxUsers > 1, N = maxUsers runs and maxUsers + 1 does not', () => {
+    const r = run(rtx4090(64), 2048, 1);
+    // Before the fix this just echoed N (1): planOffload sized the GPU layers for exactly N users.
+    expect(r.maxUsersAtContext).toBeGreaterThan(1);
+    const atMax = run(rtx4090(64), 2048, r.maxUsersAtContext);
+    const over = run(rtx4090(64), 2048, r.maxUsersAtContext + 1);
+    expect(atMax.runs).toBe(true);
+    expect(atMax.offload.fitsInRam).toBe(true);
+    expect(over.runs).toBe(false);
+    // maxUsers does not depend on the configured user count.
+    expect(atMax.maxUsersAtContext).toBe(r.maxUsersAtContext);
+  });
+
+  it('RAM-limited: fewer users than the GPU-side limit, because more KV pushes weights into a RAM that is already full', () => {
+    // 32 GB RAM cannot take all ~42.8 GB of weights, so some layers must stay on the GPU.
+    const r = run(rtx4090(32), 2048, 1);
+    const gpuOnlyLimit = run(rtx4090(1_000_000), 2048, 1).maxUsersAtContext;
+    expect(r.maxUsersAtContext).toBeGreaterThan(0);
+    expect(r.maxUsersAtContext).toBeLessThan(gpuOnlyLimit);
+    expect(run(rtx4090(32), 2048, r.maxUsersAtContext).runs).toBe(true);
+    const over = run(rtx4090(32), 2048, r.maxUsersAtContext + 1);
+    expect(over.runs).toBe(false);
+    // It fails RAM-side: the GPU could still hold the KV, but the spilled weights exceed RAM.
+    expect(over.usableBytes - over.overheadBytes - over.kvBytesAllUsers).toBeGreaterThanOrEqual(0);
+    expect(over.offload.cpuWeightBytes).toBeGreaterThan(32e9);
+  });
+
+  it('holds across contexts and RAM sizes, for the headline figure and every context-table row', () => {
+    for (const ram of [24, 32, 48, 64, 128]) {
+      for (const ctx of [2048, 8192, 32768]) {
+        const r = run(rtx4090(ram), ctx, 1);
+        const m = r.maxUsersAtContext;
+        if (m > 0) expect(run(rtx4090(ram), ctx, m).runs).toBe(true);
+        expect(run(rtx4090(ram), ctx, m + 1).runs).toBe(false);
+        for (const row of r.contextTable) {
+          if (row.maxUsers > 0) expect(run(rtx4090(ram), row.contextTokens, row.maxUsers).runs).toBe(true);
+          expect(run(rtx4090(ram), row.contextTokens, row.maxUsers + 1).runs).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('maxContext for fixed N: that context runs, and a longer one does not', () => {
+    for (const ram of [32, 64]) {
+      for (const users of [1, 4]) {
+        const r = run(rtx4090(ram), 2048, users);
+        const c = r.maxContextForUsers;
+        expect(c).toBeGreaterThan(2048);
+        expect(c).toBeLessThan(model.maxPositionEmbeddings);
+        expect(run(rtx4090(ram), c, users).runs).toBe(true);
+        expect(run(rtx4090(ram), c + 1, users).runs).toBe(false);
+      }
+    }
+  });
+
+  it('the chart line (fixedBytes + N x bytesPerUser vs usable) agrees with runs at every N', () => {
+    const r = run(rtx4090(32), 8192, 1);
+    for (let n = 1; n <= r.maxUsersAtContext + 3; n++) {
+      expect(r.fixedBytes + n * r.bytesPerUser <= r.usableBytes).toBe(run(rtx4090(32), 8192, n).runs);
+    }
+  });
+
+  it('offload OFF: capacity figures are unchanged (bit-identical to the plain formulas)', () => {
+    const r = run(rtx4090(64, false), 2048, 1, { quant: { weight: 'q2_k', kv: 'fp16' } });
+    expect(r.fixedBytes).toBe(r.weightBytes + r.overheadBytes);
+    expect(r.maxUsersAtContext).toBe(maxUsers(r.usableBytes, r.weightBytes + r.overheadBytes, r.kvBytesPerRequest));
+    expect(r.maxContextForUsers).toBe(maxContext(r.usableBytes, r.weightBytes + r.overheadBytes, 1, r.kvBytesPerToken, model.maxPositionEmbeddings));
+    expect(r.runs).toBe(r.fits);
+    expect(r.runHeadroomBytes).toBe(r.headroomBytes);
+  });
+});
+
+describe('runs / runHeadroomBytes (#20)', () => {
+  const rtx4090 = (enabled: boolean, systemRamGB = 64): HardwareSpec => ({
+    gpuName: 'RTX 4090',
+    gpuCount: 1,
+    vramGB: 24,
+    bandwidthGBs: 1008,
+    tflopsBf16: 100,
+    reservePct: 5,
+    overheadGB: 1,
+    offload: { enabled, systemRamGB, ramBandwidthGBs: 50 },
+  });
+  const q4 = { weight: 'q4_k_m', kv: 'fp16' } as const;
+
+  it('offloaded split that works: fits is false (not all in VRAM) but runs is true with a positive headroom', () => {
+    const r = calculate(state({ quant: q4, hardware: rtx4090(true), workload: { contextTokens: 2048, concurrentUsers: 1 } }));
+    expect(r.fits).toBe(false);
+    expect(r.headroomBytes).toBeLessThan(0);
+    expect(r.runs).toBe(true);
+    expect(r.runHeadroomBytes).toBeGreaterThan(0);
+  });
+
+  it('offloaded split that does not work: runs is false and runHeadroomBytes is negative', () => {
+    const r = calculate(state({ quant: q4, hardware: rtx4090(true, 1), workload: { contextTokens: 2048, concurrentUsers: 1 } }));
+    expect(r.runs).toBe(false);
+    expect(r.runHeadroomBytes).toBeLessThan(0);
+  });
+
+  it('offload on but the model fits in VRAM: runs and headroom are the plain in-VRAM figures', () => {
+    const r = calculate(state({ model: makeSpec({ params: 8e9 }), quant: q4, hardware: rtx4090(true), workload: { contextTokens: 2048, concurrentUsers: 1 } }));
+    expect(r.fits).toBe(true);
+    expect(r.runs).toBe(true);
+    expect(r.runHeadroomBytes).toBe(r.headroomBytes);
+    expect(r.offload.cpuLayers).toBe(0);
+    expect(r.offload.cpuWeightBytes).toBe(0);
+  });
+
+  it('offload off: runs === fits and runHeadroomBytes === headroomBytes', () => {
+    for (const weight of ['bf16', 'q4_k_m'] as const) {
+      const r = calculate(state({ quant: { weight, kv: 'fp16' }, hardware: rtx4090(false) }));
+      expect(r.runs).toBe(r.fits);
+      expect(r.runHeadroomBytes).toBe(r.headroomBytes);
+    }
   });
 });
 

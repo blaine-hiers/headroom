@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { makeSpec } from './__fixtures__/makeSpec';
-import { buildLaunchCommand, shellQuote } from './launchCommand';
+import { calculate } from './fit';
+import { buildLaunchCommand, shellQuote, vllmCpuOffloadGiB } from './launchCommand';
+import { DISABLED_SPECULATIVE } from './speculative';
 import type { CalcState } from './types';
 
 const hardware: CalcState['hardware'] = { gpuName: 'H100 SXM', gpuCount: 1, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 100, reservePct: 5, overheadGB: 1 };
@@ -160,5 +162,85 @@ describe('buildLaunchCommand', () => {
   it('matches a snapshot per runtime', () => {
     const commands = (['generic', 'vllm', 'llamacpp', 'sglang', 'mlx'] as const).map((runtime) => buildLaunchCommand(state({ runtime })));
     expect(commands).toMatchSnapshot();
+  });
+});
+
+describe('buildLaunchCommand with CPU/RAM offload and speculative decoding (#20)', () => {
+  const rtx4090: CalcState['hardware'] = {
+    gpuName: 'RTX 4090',
+    gpuCount: 1,
+    vramGB: 24,
+    bandwidthGBs: 1008,
+    tflopsBf16: 165,
+    reservePct: 5,
+    overheadGB: 1,
+    offload: { enabled: true, systemRamGB: 64, ramBandwidthGBs: 50 },
+  };
+  const offloaded = (overrides: Partial<CalcState> = {}) =>
+    state({
+      model: makeSpec({ id: 'bartowski/Llama-3.3-70B-Instruct-GGUF' }),
+      quant: { weight: 'q4_k_m', kv: 'fp16' },
+      hardware: rtx4090,
+      workload: { contextTokens: 2048, concurrentUsers: 1 },
+      ...overrides,
+    });
+
+  it('llama.cpp: emits the computed -ngl (matching the verdict), not 999, and no "whole model" note', () => {
+    const s = offloaded({ runtime: 'llamacpp' });
+    const plan = calculate(s).offload;
+    expect(plan.gpuLayers).toBe(39);
+    const { command, notes } = buildLaunchCommand(s);
+    expect(command).toBe('llama-server -hf bartowski/Llama-3.3-70B-Instruct-GGUF -c 2048 -ngl 39');
+    expect(notes.join(' ')).not.toMatch(/-ngl 999|whole model/);
+    expect(notes[0]).toMatch(/-ngl 39 keeps 39 of 80 layers on the GPU/);
+  });
+
+  it('llama.cpp: offload OFF still emits -ngl 999 with its note', () => {
+    const s = offloaded({ runtime: 'llamacpp', hardware: { ...rtx4090, offload: { enabled: false, systemRamGB: 64, ramBandwidthGBs: 50 } } });
+    const { command, notes } = buildLaunchCommand(s);
+    expect(command).toBe('llama-server -hf bartowski/Llama-3.3-70B-Instruct-GGUF -c 2048 -ngl 999');
+    expect(notes[0]).toMatch(/-ngl 999/);
+  });
+
+  it('llama.cpp: a split that does not run says so', () => {
+    const s = offloaded({ runtime: 'llamacpp', hardware: { ...rtx4090, offload: { enabled: true, systemRamGB: 1, ramBandwidthGBs: 50 } } });
+    expect(buildLaunchCommand(s).notes.join(' ')).toMatch(/does not run even with CPU\/RAM offload/);
+  });
+
+  it('vLLM: adds --cpu-offload-gb (GiB per GPU of RAM-resident weights, rounded up)', () => {
+    for (const gpuCount of [1, 2]) {
+      const s = offloaded({ runtime: 'vllm', hardware: { ...rtx4090, gpuCount } });
+      const plan = calculate(s).offload;
+      expect(plan.cpuWeightBytes).toBeGreaterThan(0);
+      const gib = vllmCpuOffloadGiB(plan.cpuWeightBytes, gpuCount);
+      expect(gib).toBe(Math.ceil(plan.cpuWeightBytes / gpuCount / 2 ** 30));
+      const { command, notes } = buildLaunchCommand(s);
+      expect(command).toMatch(new RegExp(`--cpu-offload-gb ${gib}( |$)`));
+      expect(notes.join(' ')).toMatch(/--cpu-offload-gb is GiB per GPU/);
+    }
+  });
+
+  it('vLLM: offload off (or nothing spilled) adds no --cpu-offload-gb', () => {
+    const off = offloaded({ runtime: 'vllm', hardware: { ...rtx4090, offload: { enabled: false, systemRamGB: 64, ramBandwidthGBs: 50 } } });
+    expect(buildLaunchCommand(off).command).not.toMatch(/cpu-offload-gb/);
+    const fitsAnyway = offloaded({ runtime: 'vllm', model: makeSpec({ id: 'org/small', params: 8e9 }) });
+    expect(calculate(fitsAnyway).offload.cpuLayers).toBe(0);
+    expect(buildLaunchCommand(fitsAnyway).command).not.toMatch(/cpu-offload-gb/);
+  });
+
+  it('vLLM: speculative decoding on adds a note (no invented flags); off adds nothing', () => {
+    const on = offloaded({ runtime: 'vllm', speculative: { ...DISABLED_SPECULATIVE, enabled: true, draftMode: 'none' } });
+    const off = offloaded({ runtime: 'vllm', speculative: DISABLED_SPECULATIVE });
+    expect(buildLaunchCommand(on).notes.join(' ')).toMatch(/configure the draft model separately/);
+    expect(buildLaunchCommand(on).command).toBe(buildLaunchCommand(off).command);
+    expect(buildLaunchCommand(off).notes.join(' ')).not.toMatch(/draft model/);
+  });
+
+  it('SGLang: offload on adds a "not modelled" note and no flag', () => {
+    const on = offloaded({ runtime: 'sglang' });
+    const off = offloaded({ runtime: 'sglang', hardware: { ...rtx4090, offload: { enabled: false, systemRamGB: 64, ramBandwidthGBs: 50 } } });
+    expect(buildLaunchCommand(on).command).toBe(buildLaunchCommand(off).command);
+    expect(buildLaunchCommand(on).notes.join(' ')).toMatch(/CPU\/RAM offload is not modelled for SGLang/);
+    expect(buildLaunchCommand(off).notes.join(' ')).not.toMatch(/offload/);
   });
 });

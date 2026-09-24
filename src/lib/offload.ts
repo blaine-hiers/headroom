@@ -50,7 +50,7 @@ export function planOffload({ weightBytes, numLayers, usableGpuBytes, offload }:
   const rawGpuLayers = bytesPerLayer > 0 ? Math.floor(usableGpuBytes / bytesPerLayer) : layers;
   const gpuLayers = Math.min(layers, Math.max(0, rawGpuLayers));
   const cpuLayers = layers - gpuLayers;
-  const gpuWeightBytes = gpuLayers * bytesPerLayer;
+  const gpuWeightBytes = gpuWeightBytesFor(weightBytes, gpuLayers, layers);
   const cpuWeightBytes = weightBytes - gpuWeightBytes;
   // KV stays on the GPU, so `usableGpuBytes` (usable − overhead − KV) already has to be
   // non-negative on its own — offloading every last layer can't rescue a GPU that can't even
@@ -59,6 +59,37 @@ export function planOffload({ weightBytes, numLayers, usableGpuBytes, offload }:
   const fitsInRam = gpuBaseFits && cpuWeightBytes <= offload.systemRamGB * 1e9;
 
   return { gpuLayers, cpuLayers, bytesPerLayer, gpuWeightBytes, cpuWeightBytes, fitsInRam };
+}
+
+/**
+ * Weight bytes held by `gpuLayers` GPU-resident layers: `gpuLayers × weights / layers`, except
+ * exactly `weightBytes` when every layer is on the GPU (no floating-point residue left "in RAM").
+ */
+function gpuWeightBytesFor(weightBytes: number, gpuLayers: number, layers: number): number {
+  if (layers > 0 && gpuLayers >= layers) return weightBytes;
+  return layers > 0 ? gpuLayers * (weightBytes / layers) : 0;
+}
+
+/**
+ * Weight bytes that can never leave the GPU because system RAM can't hold them: the weights of
+ * the fewest layers `m` in [0, numLayers] such that `weights − m × bytesPerLayer ≤ systemRamGB × 1e9`
+ * (the same comparison planOffload makes). 0 when the whole model fits in RAM.
+ *
+ * This is the offload-on "fixed" GPU cost for capacity math: every other weight layer can spill
+ * to RAM to make room for KV, so a configuration runs exactly when
+ * `usable ≥ overhead + draftWeights + minGpuWeightBytes + N × bytesPerUser`.
+ */
+export function minGpuWeightBytes(weightBytes: number, numLayers: number, systemRamGB: number): number {
+  const layers = Math.max(0, Math.floor(numLayers));
+  if (layers <= 0) return 0;
+  const ram = systemRamGB * 1e9;
+  const bytesPerLayer = weightBytes / layers;
+  const cpuFits = (m: number) => weightBytes - gpuWeightBytesFor(weightBytes, m, layers) <= ram;
+  // Closed-form guess, then nudged so it agrees exactly with planOffload's own comparison.
+  let m = bytesPerLayer > 0 ? Math.min(layers, Math.max(0, Math.ceil((weightBytes - ram) / bytesPerLayer))) : 0;
+  while (m < layers && !cpuFits(m)) m++;
+  while (m > 0 && cpuFits(m - 1)) m--;
+  return gpuWeightBytesFor(weightBytes, m, layers);
 }
 
 /** Splits `bytes` between GPU and CPU in proportion to the GPU/total layer counts. */

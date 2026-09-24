@@ -61,7 +61,7 @@ export function Results({ state, result, onApplyFit, getLink }: Props) {
   const offloaded = offloadEnabled && result.offload.cpuLayers > 0;
   // Offload replaces the classic fits/tight/nofit badge only once it actually moves layers to RAM.
   const level: FitLevel = offloaded ? (result.offload.fitsInRam ? 'offloaded' : 'nofit') : fitLevel(result.fits, result.headroomBytes, result.usableBytes);
-  // fixedBytes already accounts for offload (GPU-resident weights + overhead) when it's on.
+  // fixedBytes already accounts for offload (only the weights RAM can't hold stay fixed) when it's on.
   const fixedTooBig = result.fixedBytes > result.usableBytes;
   const tpWarnings = tensorParallelWarnings(result.tensorParallel, model.numKvHeads);
 
@@ -75,13 +75,13 @@ export function Results({ state, result, onApplyFit, getLink }: Props) {
           {BADGE_TEXT[level]}
         </div>
         <p className="verdict-detail">
-          {result.fits ? (
+          {result.runs ? (
             <>
-              <Bytes value={result.headroomBytes} /> headroom
+              <Bytes value={result.runHeadroomBytes} /> headroom{offloaded ? ' for more KV (layers in RAM)' : ''}
             </>
           ) : (
             <>
-              <Bytes value={-result.headroomBytes} /> short
+              <Bytes value={-result.runHeadroomBytes} /> short{offloadEnabled ? ' (even with CPU/RAM offload)' : ''}
             </>
           )}
           <span className="muted">
@@ -153,7 +153,7 @@ export function Results({ state, result, onApplyFit, getLink }: Props) {
           <p className="big num">{users(result.maxUsersAtContext)}</p>
           <p className="muted">
             {fixedTooBig
-              ? `${offloadEnabled ? 'GPU-resident weights' : 'weights'} + overhead${result.speculative.memory.weightBytes > 0 ? ' + draft weights' : ''} alone exceed usable VRAM`
+              ? `${offloadEnabled ? 'weights that do not fit in system RAM' : 'weights'} + overhead${result.speculative.memory.weightBytes > 0 ? ' + draft weights' : ''} alone exceed usable VRAM`
               : 'concurrent requests, each at full context'}
           </p>
         </div>
@@ -233,7 +233,7 @@ export function Results({ state, result, onApplyFit, getLink }: Props) {
         </p>
       </div>
 
-      <CostCard hardware={hardware} result={result} concurrentUsers={N} />
+      <CostCard state={state} result={result} />
       {result.speculative.enabled && (
         <div className="card">
           <h3>Decode throughput (speculative)</h3>

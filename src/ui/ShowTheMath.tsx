@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import {
   attentionParamsPerLayer,
-  calculateCloudCost,
+  cloudCostFor,
+  effectiveAggregateTokS,
   DECODE_EFFICIENCY,
   effectiveSlidingLayers,
   effectiveVramGB,
@@ -91,7 +92,7 @@ export function ShowTheMath({ state, result }: Props) {
   const N = Math.floor(workload.concurrentUsers);
   const kvCtx = kvContextForRuntime(C, runtime);
   // Everything that doesn't scale with users, as fit.ts computes it: includes the draft
-  // model's weights when speculation is on, and only GPU-resident weights when offload is on.
+  // model's weights when speculation is on, and only the weights system RAM can't hold when offload is on.
   const fixed = result.fixedBytes;
   const active = result.activeParams;
   const method = result.activeParamsMethod;
@@ -119,16 +120,7 @@ export function ShowTheMath({ state, result }: Props) {
       : runtime === 'sglang'
         ? `${n(hw.gpuCount)} × ${n(effectiveVram, 2)} × 1e9 × ${SGLANG_MEM_FRACTION_STATIC}`
         : `${n(hw.gpuCount)} × ${n(effectiveVram, 2)} × 1e9 × (1 − ${n(hw.reservePct, 2)}/100)`;
-  const cost = calculateCloudCost({
-    usdPerHour: hw.usdPerHour,
-    gpuCount: hw.gpuCount,
-    bandwidthGBs: hw.bandwidthGBs,
-    activeWeightBytes: activeBytes,
-    kvBytesPerRequest: result.kvBytesPerRequest,
-    efficiency: result.throughput.efficiency,
-    aggregateTokS: result.throughput.aggregateTokS,
-    maxUsersAtContext: maxU,
-  });
+  const cost = cloudCostFor(state, result);
   const offload = resolveOffload(hw.offload);
   const offloadPlan = result.offload;
   const activeSplit = splitByLayerFraction(activeBytes, offloadPlan.gpuLayers, model.numLayers);
@@ -316,7 +308,7 @@ export function ShowTheMath({ state, result }: Props) {
           <Step
             title="Cloud cost"
             formula="costPerHour = usdPerHour × gpuCount; $/1M output tokens = costPerHour / (aggregateTokS × 3600) × 1e6"
-            sub={`${n(hw.usdPerHour ?? 0, 2)} × ${n(hw.gpuCount)}; ${formatUsd(cost.costPerHour)} / (${n(result.throughput.aggregateTokS, 1)} × 3600) × 1e6`}
+            sub={`${n(hw.usdPerHour ?? 0, 2)} × ${n(hw.gpuCount)}; ${formatUsd(cost.costPerHour)} / (${n(effectiveAggregateTokS(result), 1)} × 3600) × 1e6`}
             result={
               <>
                 {formatUsd(cost.costPerHour)}/hr, {cost.atCurrentUsers !== undefined ? `${formatUsd(cost.atCurrentUsers)}/1M tok at N users` : '—'}, best case at max users
@@ -367,6 +359,12 @@ export function ShowTheMath({ state, result }: Props) {
                     ? 'no — KV + overhead alone exceed usable VRAM; no amount of RAM fixes that'
                     : 'no — the RAM-resident layers do not fit in system RAM'
               }
+            />
+            <Step
+              title="Offload: fixed GPU cost for max users / max context"
+              formula="overhead + draft weights + weights system RAM can't hold (fewest whole layers)"
+              sub={`${n(result.overheadBytes)} + ${n(result.speculative.memory.weightBytes)} + ${n(result.fixedBytes - result.overheadBytes - result.speculative.memory.weightBytes)}`}
+              result={<>{B(result.fixedBytes)} (every other layer can spill to RAM to make room for KV)</>}
             />
             <Step
               title="Offload: decode throughput"

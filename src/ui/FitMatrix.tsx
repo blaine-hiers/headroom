@@ -26,7 +26,7 @@ export function FitMatrix({ state, onApply }: Props) {
       <summary>Fit matrix: weight quant × context</summary>
       <p className="help">
         Max concurrent users at each weight quant and context, for {state.hardware.gpuCount} × {state.hardware.gpuName}. Colour shows whether{' '}
-        {formatNumber(workload.concurrentUsers)} user{workload.concurrentUsers === 1 ? '' : 's'} fits. Click a cell to apply it.
+        {formatNumber(workload.concurrentUsers)} user{workload.concurrentUsers === 1 ? '' : 's'} fits (or runs with CPU/RAM offload, when that's on). Click a cell to apply it.
       </p>
       <div className="table-wrap">
         <table className="fit-matrix-table">
@@ -45,7 +45,7 @@ export function FitMatrix({ state, onApply }: Props) {
               <tr key={row.weight}>
                 <th scope="row">{WEIGHT_QUANTS[row.weight].label}</th>
                 {row.cells.map((cell) => {
-                  const level = fitLevel(cell.fits, cell.headroomBytes, cell.usableBytes);
+                  const level = fitLevel(cell.runs, cell.headroomBytes, cell.usableBytes);
                   const chosen = row.weight === quant.weight && cell.contextTokens === chosenContext;
                   const label = `${WEIGHT_QUANTS[row.weight].label} at ${formatTokens(cell.contextTokens)}: ${
                     cell.maxUsers > 0 ? `${cellUsers(cell.maxUsers)} max users` : 'does not fit'

@@ -1,7 +1,7 @@
 import { resolveWeights } from './fileWeights';
 import { kvBytesForContext, kvBytesPerToken } from './kvcache';
 import { estimateTtft, prefillFlops } from './prefill';
-import { offloadDecodeThroughput, planOffload, resolveOffload, splitByLayerFraction } from './offload';
+import { minGpuWeightBytes, offloadDecodeThroughput, planOffload, resolveOffload, splitByLayerFraction } from './offload';
 import { DISABLED_SPECULATIVE, draftKvBytesPerRequest, speculativeMemory, speculativeThroughput } from './speculative';
 import { checkTensorParallelSplit, tensorParallelEfficiency } from './tensorParallel';
 import { DECODE_EFFICIENCY, decodeThroughput } from './throughput';
@@ -146,11 +146,24 @@ export function calculate(state: CalcState): CalcResult {
     usableGpuBytes: usable - overhead - draftMemory.weightBytes - users * bytesPerUser,
     offload: offloadSpec,
   });
-  // Capacity math (max users/context, the context table, the chart) treats the GPU-resident
-  // weights as the fixed cost once offload is on, assuming the rest already spilled to RAM —
-  // the same simplification planOffload makes, so they agree with the fit/offload badge.
+  // Capacity math (max users/context, the context table, the fit matrix, the chart) with offload
+  // on: KV, overhead and draft weights must stay on the GPU, and so must any weight layers system
+  // RAM can't hold; every other layer can spill to RAM to make room for more KV. So the fixed GPU
+  // cost is overhead + draft weights + minGpuWeightBytes, independent of N, and a configuration
+  // runs exactly when fixedBytes + N × bytesPerUser ≤ usable — the same condition as
+  // planOffload's fitsInRam at that N, so maxUsers/maxContext are the largest N/C that still run.
   // Bit-identical to `fixed` when offload is off/absent (no separate computation).
-  const fixedBytes = offloadSpec.enabled ? offload.gpuWeightBytes + overhead + draftMemory.weightBytes : fixed;
+  const fixedBytes = offloadSpec.enabled
+    ? minGpuWeightBytes(weights, model.numLayers, offloadSpec.systemRamGB) + overhead + draftMemory.weightBytes
+    : fixed;
+  // Does this configuration actually run: entirely in VRAM, or (offload on) with the split working.
+  // `fits` keeps meaning "fits entirely in VRAM"; `runs` is what verdict/matrix/compare key off.
+  const fitsInVram = total <= usable;
+  const runs = fitsInVram || (offloadSpec.enabled && offload.fitsInRam);
+  // Headroom that matches `runs`: the usual usable − total whenever the model fits in VRAM (and
+  // always with offload off); once layers spill, the VRAM left over the must-stay-on-GPU cost
+  // (usable − fixedBytes − N × bytesPerUser), i.e. room for more KV, or how far short it is.
+  const runHeadroomBytes = !offloadSpec.enabled || fitsInVram ? usable - total : usable - (fixedBytes + users * bytesPerUser);
 
   const contexts = new Set<number>(TABLE_CONTEXTS);
   contexts.add(ctx);
@@ -229,7 +242,9 @@ export function calculate(state: CalcState): CalcResult {
     usableBytes: usable,
     totalBytes: total,
     headroomBytes: usable - total,
-    fits: total <= usable,
+    fits: fitsInVram,
+    runs,
+    runHeadroomBytes,
     fixedBytes,
     bytesPerUser,
     maxUsersAtContext: maxUsers(usable, fixedBytes, bytesPerUser),

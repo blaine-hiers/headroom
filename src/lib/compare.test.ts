@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { makeSpec } from './__fixtures__/makeSpec';
 import type { CalcState } from './types';
-import { bestColumnIndex, COMPARE_ROWS, decodeCompareColumns, encodeCompareState } from './compare';
+import { bestColumnIndex, COMPARE_ROWS, compareRowWinner, decodeCompareColumns, encodeCompareState } from './compare';
+import { calculate } from './fit';
 import { decodeState, encodeState } from './urlState';
 
 const base: CalcState = {
@@ -99,5 +100,35 @@ describe('COMPARE_ROWS', () => {
   it('only excludes non-fitting columns from winning the rows whose number assumes the model is resident', () => {
     const excluded = COMPARE_ROWS.filter((r) => r.excludeUnfitFromBest).map((r) => r.key);
     expect(excluded.sort()).toEqual(['maxContext', 'maxUsers', 'tokS'].sort());
+  });
+});
+
+describe('compareRowWinner (#20: offloaded columns that run can win)', () => {
+  const q4 = { weight: 'q4_k_m', kv: 'fp16' } as const;
+  const offloaded: CalcState = {
+    ...base,
+    quant: q4,
+    hardware: { ...base.hardware, offload: { enabled: true, systemRamGB: 64, ramBandwidthGBs: 50 } },
+    workload: { contextTokens: 2048, concurrentUsers: 1 },
+  };
+  const noOffload: CalcState = { ...offloaded, hardware: base.hardware };
+  const row = (key: string) => COMPARE_ROWS.find((r) => r.key === key)!;
+
+  it('an offloaded column that runs is eligible for best tok/s and max users; the same config without offload is not', () => {
+    const a = calculate(offloaded);
+    const b = calculate(noOffload);
+    expect(a.fits).toBe(false);
+    expect(a.runs).toBe(true);
+    expect(b.runs).toBe(false);
+    expect(compareRowWinner(row('tokS'), [a, b])).toBe(0);
+    expect(compareRowWinner(row('maxUsers'), [a, b])).toBe(0);
+    // Headroom compares the runs-aware figure, so the column that runs wins that row too.
+    expect(compareRowWinner(row('headroom'), [a, b])).toBe(0);
+  });
+
+  it('an offloaded split that does not run stays ineligible', () => {
+    const broken = calculate({ ...offloaded, hardware: { ...base.hardware, offload: { enabled: true, systemRamGB: 1, ramBandwidthGBs: 50 } } });
+    expect(broken.runs).toBe(false);
+    expect(compareRowWinner(row('maxUsers'), [broken, calculate(noOffload)])).toBe(-1);
   });
 });

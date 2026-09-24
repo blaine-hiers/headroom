@@ -1,5 +1,8 @@
 // Builds a ready-to-paste launch command for the chosen runtime profile from the current
 // calculator state. Pure and framework-free: src/ui/LaunchCommand.tsx only renders the result.
+import { calculate } from './fit';
+import { resolveOffload } from './offload';
+import { formatBytes } from './format';
 import { findGpuPreset } from './presets/gpus';
 import {
   LLAMACPP_DEFAULT_CACHE_TYPE,
@@ -11,7 +14,7 @@ import {
   llamaCppPerSlotContext,
   pagedKvCacheDtype,
 } from './runtime';
-import type { CalcState } from './types';
+import type { CalcState, OffloadPlan } from './types';
 
 export interface LaunchCommand {
   /** null for `generic`, which has no serving runtime to launch. */
@@ -55,6 +58,13 @@ function hardwareMismatchNote(runtime: CalcState['runtime'], gpuName: string): s
   return null;
 }
 
+/** vLLM's --cpu-offload-gb is GiB per GPU: the RAM-resident weights split across the tensor-parallel GPUs, rounded up. */
+export function vllmCpuOffloadGiB(cpuWeightBytes: number, gpuCount: number): number {
+  return Math.ceil(cpuWeightBytes / Math.max(1, gpuCount) / 2 ** 30);
+}
+
+const OFFLOAD_DOES_NOT_RUN_NOTE = 'This GPU/RAM split does not run even with CPU/RAM offload (see the verdict above), so this command will not start as-is.';
+
 export function buildLaunchCommand(state: CalcState): LaunchCommand {
   const { model, quant, hardware, workload, runtime = 'generic' } = state;
   const id = model.id || model.name;
@@ -63,6 +73,9 @@ export function buildLaunchCommand(state: CalcState): LaunchCommand {
   const N = Math.max(1, Math.floor(workload.concurrentUsers));
   const gpuCount = Math.max(1, Math.floor(hardware.gpuCount));
   const mismatchNote = hardwareMismatchNote(runtime, hardware.gpuName);
+  // With CPU/RAM offload on, the layer split comes from the same calculate() the verdict shows.
+  const offloadPlan: OffloadPlan | null = resolveOffload(hardware.offload).enabled ? calculate(state).offload : null;
+  const speculativeOn = state.speculative?.enabled === true;
 
   switch (runtime) {
     case 'vllm': {
@@ -73,6 +86,17 @@ export function buildLaunchCommand(state: CalcState): LaunchCommand {
       const notes = [
         'Starting point, not a guarantee: real usage also depends on --enforce-eager, batch size, and the model.',
       ];
+      if (offloadPlan && offloadPlan.cpuWeightBytes > 0) {
+        const gib = vllmCpuOffloadGiB(offloadPlan.cpuWeightBytes, gpuCount);
+        parts.push(`--cpu-offload-gb ${gib}`);
+        notes.push(
+          `--cpu-offload-gb is GiB per GPU: the ${formatBytes(offloadPlan.cpuWeightBytes)} of weights that don't fit in VRAM${gpuCount > 1 ? `, split across ${gpuCount} GPUs` : ''}, rounded up. vLLM streams them over PCIe every step, so real speed can differ from the RAM-bandwidth estimate.`,
+        );
+      }
+      if (offloadPlan && !offloadPlan.fitsInRam) notes.push(OFFLOAD_DOES_NOT_RUN_NOTE);
+      if (speculativeOn) {
+        notes.push("Speculative decoding is not included: configure the draft model separately with vLLM's speculative-decoding config.");
+      }
       const kvNote = kvApproximationNote(quant.kv, 'vLLM');
       if (kvNote) notes.push(kvNote);
       if (mismatchNote) notes.push(mismatchNote);
@@ -84,10 +108,16 @@ export function buildLaunchCommand(state: CalcState): LaunchCommand {
       const isGguf = looksLikeGgufRepo(id);
       const parts = [isGguf ? `llama-server -hf ${quotedId}` : 'llama-server -m /path/to/model.gguf', `-c ${totalCtx}`];
       if (N > 1) parts.push(`-np ${N}`);
-      parts.push('-ngl 999');
+      // Offload on: the computed GPU layer count (what the verdict shows). Off: every layer on the GPU.
+      parts.push(offloadPlan ? `-ngl ${offloadPlan.gpuLayers}` : '-ngl 999');
       const cacheType = llamaCppCacheType(quant.kv);
       if (cacheType !== LLAMACPP_DEFAULT_CACHE_TYPE) parts.push(`--cache-type-k ${cacheType}`, `--cache-type-v ${cacheType}`);
-      const notes = ['Starting point, not a guarantee: -ngl 999 offloads every layer, which needs enough VRAM for the whole model.'];
+      const notes = [
+        offloadPlan
+          ? `Starting point, not a guarantee: -ngl ${offloadPlan.gpuLayers} keeps ${offloadPlan.gpuLayers} of ${model.numLayers} layers on the GPU and runs the other ${offloadPlan.cpuLayers} from system RAM.`
+          : 'Starting point, not a guarantee: -ngl 999 offloads every layer, which needs enough VRAM for the whole model.',
+      ];
+      if (offloadPlan && !offloadPlan.fitsInRam) notes.push(OFFLOAD_DOES_NOT_RUN_NOTE);
       if (!isGguf) {
         notes.push(
           `llama.cpp needs a GGUF file: "${id}" does not look like a GGUF repo. Convert it, or find a -GGUF quant of it (e.g. a "…-GGUF" repo) and either replace -m with -hf <that repo> or point -m at a local .gguf file.`,
@@ -109,6 +139,9 @@ export function buildLaunchCommand(state: CalcState): LaunchCommand {
       if (kvDtype !== PAGED_DEFAULT_KV_CACHE_DTYPE) parts.push(`--kv-cache-dtype ${kvDtype}`);
       if (gpuCount > 1) parts.push(`--tp ${gpuCount}`);
       const notes = ['Starting point, not a guarantee: real usage also depends on batch size and the model.'];
+      if (offloadPlan) {
+        notes.push('CPU/RAM offload is not modelled for SGLang: this command assumes the whole model fits in VRAM, and has no offload flag.');
+      }
       const kvNote = kvApproximationNote(quant.kv, 'SGLang');
       if (kvNote) notes.push(kvNote);
       if (mismatchNote) notes.push(mismatchNote);

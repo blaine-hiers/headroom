@@ -26,8 +26,12 @@ export interface FitMatrixCell {
   contextTokens: number;
   /** Max concurrent users at this quant + context (independent of the configured user count). */
   maxUsers: number;
-  /** Whether the currently configured user count fits at this quant + context. */
-  fits: boolean;
+  /**
+   * Whether the currently configured user count runs at this quant + context (CalcResult.runs:
+   * fits in VRAM, or runs with CPU/RAM offload when that's on).
+   */
+  runs: boolean;
+  /** CalcResult.runHeadroomBytes — the headroom that matches `runs`. */
   headroomBytes: number;
   usableBytes: number;
 }
@@ -67,8 +71,8 @@ export function fitMatrix(
         weight,
         contextTokens,
         maxUsers: result.maxUsersAtContext,
-        fits: result.fits,
-        headroomBytes: result.headroomBytes,
+        runs: result.runs,
+        headroomBytes: result.runHeadroomBytes,
         usableBytes: result.usableBytes,
       };
     }),

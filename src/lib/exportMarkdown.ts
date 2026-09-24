@@ -1,4 +1,4 @@
-import { calculateCloudCost } from './cost';
+import { cloudCostFor } from './cost';
 import { formatBytes, formatNumber, formatSeconds, formatTokens, formatUsd } from './format';
 import { resolveOffload } from './offload';
 import { KV_QUANTS, WEIGHT_QUANTS } from './quant';
@@ -73,16 +73,7 @@ export function buildMarkdownSummary(state: CalcState, result: CalcResult, share
   lines.push(`| Decode tok/s | ${formatNumber(result.throughput.perUserTokS, 1)} per user, ${formatNumber(result.throughput.aggregateTokS, 1)} aggregate |`);
   lines.push(`| Time to first token | ${formatSeconds(result.prefill.ttftSeconds)} |`);
 
-  const cost = calculateCloudCost({
-    usdPerHour: hardware.usdPerHour,
-    gpuCount: hardware.gpuCount,
-    bandwidthGBs: hardware.bandwidthGBs,
-    activeWeightBytes: result.activeWeightBytes,
-    kvBytesPerRequest: result.kvBytesPerRequest,
-    efficiency: result.throughput.efficiency,
-    aggregateTokS: result.throughput.aggregateTokS,
-    maxUsersAtContext: result.maxUsersAtContext,
-  });
+  const cost = cloudCostFor(state, result);
   if (cost) {
     const perMillion = cost.atCurrentUsers !== undefined ? `, ${formatUsd(cost.atCurrentUsers)}/1M tokens` : '';
     lines.push(`| Cloud cost | ${formatUsd(cost.costPerHour)}/hr${perMillion} |`);

@@ -44,15 +44,15 @@ describe('fitMatrixToCsv', () => {
         {
           weight: 'q4_k_m',
           cells: [
-            { weight: 'q4_k_m', contextTokens: 2048, maxUsers: 12, fits: true, headroomBytes: 1, usableBytes: 2 },
-            { weight: 'q4_k_m', contextTokens: 8192, maxUsers: 0, fits: false, headroomBytes: -1, usableBytes: 2 },
+            { weight: 'q4_k_m', contextTokens: 2048, maxUsers: 12, runs: true, headroomBytes: 1, usableBytes: 2 },
+            { weight: 'q4_k_m', contextTokens: 8192, maxUsers: 0, runs: false, headroomBytes: -1, usableBytes: 2 },
           ],
         },
         {
           weight: 'fp16',
           cells: [
-            { weight: 'fp16', contextTokens: 2048, maxUsers: 4, fits: true, headroomBytes: 1, usableBytes: 2 },
-            { weight: 'fp16', contextTokens: 8192, maxUsers: 0, fits: false, headroomBytes: -1, usableBytes: 2 },
+            { weight: 'fp16', contextTokens: 2048, maxUsers: 4, runs: true, headroomBytes: 1, usableBytes: 2 },
+            { weight: 'fp16', contextTokens: 8192, maxUsers: 0, runs: false, headroomBytes: -1, usableBytes: 2 },
           ],
         },
       ],

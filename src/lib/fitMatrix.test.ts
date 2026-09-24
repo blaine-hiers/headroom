@@ -58,8 +58,8 @@ describe('fitMatrix', () => {
           workload: { ...s.workload, contextTokens: cell.contextTokens },
         });
         expect(cell.maxUsers).toBe(oneOff.maxUsersAtContext);
-        expect(cell.fits).toBe(oneOff.fits);
-        expect(cell.headroomBytes).toBe(oneOff.headroomBytes);
+        expect(cell.runs).toBe(oneOff.runs);
+        expect(cell.headroomBytes).toBe(oneOff.runHeadroomBytes);
         expect(cell.usableBytes).toBe(oneOff.usableBytes);
       }
     }
@@ -96,5 +96,28 @@ describe('fitMatrix', () => {
     // The fp16 row must NOT reuse the file bytes pinned to q4_k_m: it should be the (larger) estimate.
     expect(fp16Result.weightSource).toBe('estimate');
     expect(fp16Result.weightBytes).toBeGreaterThan(q4kmResult.weightBytes);
+  });
+});
+
+describe('fitMatrix with CPU/RAM offload (#20)', () => {
+  it('colour (runs) and label (max users) agree in every cell: runs exactly when maxUsers >= the configured users', () => {
+    for (const users of [1, 4]) {
+      const m = fitMatrix(
+        state({
+          hardware: { ...hw, offload: { enabled: true, systemRamGB: 32, ramBandwidthGBs: 50 } },
+          workload: { contextTokens: 8192, concurrentUsers: users },
+        }),
+      );
+      let sawOffloadedRun = false;
+      for (const row of m.rows) {
+        for (const cell of row.cells) {
+          expect(cell.runs).toBe(cell.maxUsers >= users);
+          expect(cell.runs).toBe(cell.headroomBytes >= 0);
+          if (cell.runs && (row.weight === 'q4_k_m' || row.weight === 'q8_0')) sawOffloadedRun = true;
+        }
+      }
+      // 70B at Q4/Q8 does not fit a 24 GB card, so these runs are genuinely offloaded ones.
+      expect(sawOffloadedRun).toBe(true);
+    }
   });
 });

@@ -1,26 +1,18 @@
-import { calculateCloudCost, formatNumber, formatUsd } from '../lib';
-import type { CalcResult, HardwareSpec } from '../lib';
+import { cloudCostFor, formatNumber, formatUsd } from '../lib';
+import type { CalcResult, CalcState } from '../lib';
 
 interface Props {
-  hardware: HardwareSpec;
+  state: CalcState;
   result: CalcResult;
-  concurrentUsers: number;
 }
 
 const perMillion = (v: number | undefined) => (v === undefined ? '—' : formatUsd(v));
 
 /** Hidden unless a $/GPU-hour price is set on the Hardware panel. */
-export function CostCard({ hardware, result, concurrentUsers }: Props) {
-  const cost = calculateCloudCost({
-    usdPerHour: hardware.usdPerHour,
-    gpuCount: hardware.gpuCount,
-    bandwidthGBs: hardware.bandwidthGBs,
-    activeWeightBytes: result.activeWeightBytes,
-    kvBytesPerRequest: result.kvBytesPerRequest,
-    efficiency: result.throughput.efficiency,
-    aggregateTokS: result.throughput.aggregateTokS,
-    maxUsersAtContext: result.maxUsersAtContext,
-  });
+export function CostCard({ state, result }: Props) {
+  const { hardware } = state;
+  const concurrentUsers = state.workload.concurrentUsers;
+  const cost = cloudCostFor(state, result);
   if (!cost) return null;
 
   const N = Math.floor(concurrentUsers);
@@ -43,7 +35,10 @@ export function CostCard({ hardware, result, concurrentUsers }: Props) {
           <p className="muted">per 1M output tokens at max users (best case)</p>
         </div>
       </div>
-      <p className="help">Typical on-demand cloud list price, prices as of 2026-09, approximate — not a quote. Set or clear it in the Hardware panel.</p>
+      <p className="help">
+        Typical on-demand cloud list price, prices as of 2026-09, approximate — not a quote. Set or clear it in the Hardware panel.
+        {result.speculative.enabled && ' Priced at the speculative-decoding tok/s.'}
+      </p>
     </div>
   );
 }

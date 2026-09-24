@@ -274,12 +274,27 @@ export interface CalcResult {
   usableBytes: number;
   totalBytes: number;
   headroomBytes: number; // usable - total (negative when it does not fit)
+  /** Fits entirely in VRAM (total ≤ usable). Ignores offload — see `runs`. */
   fits: boolean;
   /**
+   * The configuration actually runs: it fits entirely in VRAM, or CPU/RAM offload is on and the
+   * GPU/RAM split works (OffloadPlan.fitsInRam). Equal to `fits` when offload is off. The
+   * verdict headroom line, fit-matrix colouring and compare "best" eligibility key off this.
+   */
+  runs: boolean;
+  /**
+   * Headroom matching `runs`: `headroomBytes` whenever the model fits in VRAM (always, with
+   * offload off); once layers spill to RAM, usable − (fixedBytes + N × bytesPerUser) — the VRAM
+   * left for more KV over what must stay on the GPU. Negative = that much short.
+   */
+  runHeadroomBytes: number;
+  /**
    * Everything that doesn't scale with concurrent users: weights + overhead + the speculative
-   * draft's weights normally, or — with CPU/RAM offload on — the GPU-resident weights + overhead +
-   * draft weights, since the rest already spilled to RAM. Shared by the capacity math (maxUsers/maxContext), the "fixed alone
-   * exceeds usable" check, and the chart, so they all agree with the fit/offload badge.
+   * draft's weights normally, or — with CPU/RAM offload on — overhead + draft weights + only the
+   * weight layers system RAM can't hold (minGpuWeightBytes), since every other layer can spill
+   * to RAM to make room for KV. Shared by the capacity math (maxUsers/maxContext, the context
+   * table, the fit matrix), the "fixed alone exceeds usable" check, and the chart, so they all
+   * agree with `runs`.
    */
   fixedBytes: number;
   /** Everything that scales per user at the chosen context: target KV per request + the draft's KV per request (KV always stays on the GPU). */
