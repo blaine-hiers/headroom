@@ -43,9 +43,9 @@ export function findFittingHardware(state: CalcState): HardwareFinderRow[] {
           vramGB: gpu.vramGB,
           bandwidthGBs: gpu.bandwidthGBs,
           tflopsBf16: gpu.tflopsBf16,
-          // A non-Apple GPU has no wired-memory limit; a user's override for a different Apple
-          // GPU may not apply to this one either, so only carry it over onto another Apple part.
-          appleWiredLimitGB: gpu.vendor === 'apple' ? state.hardware.appleWiredLimitGB : undefined,
+          // A wired-memory override belongs to the Apple part it was set for; every other
+          // candidate uses its own default limit (effectiveVramGB).
+          appleWiredLimitGB: gpu.name === state.hardware.gpuName ? state.hardware.appleWiredLimitGB : undefined,
         },
       };
       const result = calculate(candidate);

@@ -36,7 +36,7 @@ export function HardwareFinder({ state, onApply }: Props) {
     const patch: Partial<HardwareSpec> = { gpuName: row.gpu.name, gpuCount: row.gpuCount };
     // Same clearing rule the GPU select applies: a wired-memory override doesn't carry to a
     // different (or non-Apple) GPU.
-    if (row.gpu.vendor !== 'apple' && state.hardware.appleWiredLimitGB !== undefined) {
+    if (row.gpu.name !== state.hardware.gpuName && state.hardware.appleWiredLimitGB !== undefined) {
       patch.appleWiredLimitGB = undefined;
     }
     onApply(patch);

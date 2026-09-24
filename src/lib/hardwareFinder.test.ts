@@ -32,6 +32,16 @@ describe('findFittingHardware', () => {
     expect(h100?.result.fits).toBe(true);
   });
 
+  it("keeps an Apple wired-limit override on its own GPU, not on other Apple presets", () => {
+    const m2: HardwareSpec = { gpuName: 'Apple M2 Ultra', gpuCount: 1, vramGB: 192, bandwidthGBs: 800, tflopsBf16: 54.4, reservePct: 5, overheadGB: 1, appleWiredLimitGB: 20 };
+    const small = state({ model: makeSpec({ params: 8e9 }), hardware: m2 });
+    const withOverride = findFittingHardware(small);
+    const without = findFittingHardware({ ...small, hardware: { ...m2, appleWiredLimitGB: undefined } });
+    const m4 = (rows: typeof withOverride) => rows.find((r) => r.gpu.name === 'Apple M4 Max');
+    expect(m4(withOverride)?.gpuCount).toBe(m4(without)?.gpuCount);
+    expect(m4(withOverride)?.result.usableBytes).toBe(m4(without)?.result.usableBytes);
+  });
+
   it('every returned row actually fits per calculate()', () => {
     const rows = findFittingHardware(state());
     for (const row of rows) {
