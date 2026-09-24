@@ -95,12 +95,24 @@ The file figure only applies while the weight quant is the one the files are in.
 
 **Fit**
 - `effectiveVramGB = vramGB` for non-Apple GPUs; for Apple GPUs (which have unified memory), `effectiveVramGB = min(appleWiredLimitGB, vramGB ≤ 36 ? vramGB × 0.67 : vramGB × 0.75)`. macOS caps GPU-wired memory by default at 0.67× RAM for ≤36 GB, 0.75× above that (observed by MLX and llama.cpp communities). You can raise it with `sudo sysctl iogpu.wired_limit_mb=<MB>`, and Headroom will use that limit if you provide `appleWiredLimitGB` (clamped to vramGB).
-- `usable = gpuCount × effectiveVramGB × 1e9 × (1 − reservePct/100)`
-- `fixed = weights + overheadGB × 1e9 × gpuCount`
+- `usable = gpuCount × effectiveVramGB × 1e9 × (1 − reservePct/100)` for the `generic` runtime; other runtimes replace this (see **Runtime profiles**).
+- `fixed = weights + overheadGB × 1e9 × gpuCount` (plus a runtime's own overhead allowance, if any).
 - `total(N) = fixed + N × kvPerRequest(C)`
 - `fits = total(N) ≤ usable`. Headroom under 10% of usable is flagged as **Tight**.
 - `maxUsers(C) = floor((usable − fixed) / kvPerRequest(C))`, or 0 if that is negative
-- `maxContext(N) = min(maxPositionEmbeddings, floor((usable − fixed) / (N × bytesPerTokenFullAttention)))`. This uses the full-attention rate, so it is conservative: sliding layers only lower it.
+- `maxContext(N) = min(maxPositionEmbeddings, floor((usable − fixed) / (N × bytesPerTokenFullAttention)))`. This uses the full-attention rate, so it is conservative: sliding layers only lower it. Under `vllm`, the memory-bound half of that formula is additionally rounded DOWN to a 16-token block multiple, so the reported context's actual (block-rounded) KV reservation never overshoots `usable`.
+
+**Runtime profiles** (`src/lib/runtime.ts`, `src/lib/launchCommand.ts`). `generic` is the default and reproduces every number above exactly; the others change how usable VRAM (and, for vLLM, KV sizing) is computed, and add a *Launch command* card:
+
+| Runtime | Usable VRAM | Extra overhead | KV sizing |
+|---|---|---|---|
+| `generic` | `gpuCount × effectiveVramGB × 1e9 × (1 − reservePct/100)` | — | exact context |
+| `vllm` | `gpuCount × effectiveVramGB × 1e9 × gpu_memory_utilization` (default 0.9) | + 1 GB × gpuCount, a conservative labelled allowance for CUDA-graph capture and activation buffers | context rounded up to a 16-token block (vLLM's paged KV cache allocates in fixed-size blocks) |
+| `sglang` | `gpuCount × effectiveVramGB × 1e9 × mem_fraction_static` (default 0.88) | — | exact context |
+| `llamacpp` (covers Ollama) | same as `generic` | — | exact context; `-c` is one pool shared across `-np` parallel slots, so the launch command sets `-c` to `contextTokens × concurrentUsers` and shows/warns on the per-slot context (`c / np`) |
+| `mlx` | same as `generic` (Apple unified memory already goes through `effectiveVramGB`'s wired-memory limit above — MLX does not duplicate that math) | — | exact context |
+
+The launch command omits any flag that equals the runtime's own default (e.g. `--tensor-parallel-size` when `gpuCount` is 1, `--kv-cache-dtype`/`--cache-type-k/v` when the chosen KV quant is the runtime's native/unquantized type) and is always labelled a starting point, not a guarantee. The model id is shell-quoted (POSIX single quotes) whenever it contains anything outside `[A-Za-z0-9._/:@=+-]`. For `llamacpp`, `-hf <id>` is only used when the id looks like a GGUF repo (contains "gguf"); otherwise the command falls back to a `-m /path/to/model.gguf` placeholder with a note, since llama.cpp needs an actual GGUF file and every bundled preset is a safetensors repo. The notes also flag an unusual runtime/GPU pairing (MLX on a non-Apple GPU, or vLLM/SGLang on an Apple GPU); an unrecognized or "Custom" GPU is never flagged.
 
 **Multi-GPU (tensor parallel)**. With more than one GPU, Headroom assumes tensor parallelism (VRAM and bandwidth add across GPUs). vLLM and most runtimes refuse to start when the head count can't be split evenly, so Headroom checks it and warns next to the fit badge:
 - `numAttentionHeads % gpuCount === 0` (from the config's `num_attention_heads`, when known). If not, the nearest GPU counts that do divide evenly are suggested. Models without that field (no structural `ffn` spec) skip the check rather than warn falsely.

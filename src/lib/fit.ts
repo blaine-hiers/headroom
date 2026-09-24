@@ -3,9 +3,10 @@ import { kvBytesForContext, kvBytesPerToken } from './kvcache';
 import { estimateTtft, prefillFlops } from './prefill';
 import { checkTensorParallelSplit, tensorParallelEfficiency } from './tensorParallel';
 import { DECODE_EFFICIENCY, decodeThroughput } from './throughput';
-import type { CalcResult, CalcState, HardwareSpec } from './types';
+import type { CalcResult, CalcState, HardwareSpec, RuntimeKey } from './types';
 import { activeParamsDetailed } from './weights';
 import { findGpuPreset } from './presets/gpus';
+import { SGLANG_MEM_FRACTION_STATIC, VLLM_GPU_MEMORY_UTILIZATION, VLLM_KV_BLOCK_TOKENS, VLLM_OVERHEAD_ALLOWANCE_GB, kvContextForRuntime } from './runtime';
 
 export const TABLE_CONTEXTS = [2048, 8192, 32768, 131072] as const;
 
@@ -44,6 +45,29 @@ export function overheadBytes(hw: HardwareSpec): number {
   return hw.overheadGB * 1e9 * hw.gpuCount;
 }
 
+/**
+ * Usable VRAM under a runtime profile. vLLM and SGLang reserve a fixed fraction of VRAM for
+ * their own memory pool instead of the generic reserve %; llama.cpp and MLX use the same
+ * accounting as `generic` (MLX already gets Apple's wired-memory limit through
+ * `effectiveVramGB`, so there is nothing runtime-specific to add).
+ */
+export function usableBytesForRuntime(hw: HardwareSpec, runtime: RuntimeKey): number {
+  switch (runtime) {
+    case 'vllm':
+      return hw.gpuCount * effectiveVramGB(hw.gpuName, hw.vramGB, hw.appleWiredLimitGB) * 1e9 * VLLM_GPU_MEMORY_UTILIZATION;
+    case 'sglang':
+      return hw.gpuCount * effectiveVramGB(hw.gpuName, hw.vramGB, hw.appleWiredLimitGB) * 1e9 * SGLANG_MEM_FRACTION_STATIC;
+    default:
+      return usableBytes(hw);
+  }
+}
+
+/** Runtime overhead under a runtime profile: the generic overhead, plus vLLM's CUDA-graph/activation allowance. */
+export function overheadBytesForRuntime(hw: HardwareSpec, runtime: RuntimeKey): number {
+  const base = overheadBytes(hw);
+  return runtime === 'vllm' ? base + VLLM_OVERHEAD_ALLOWANCE_GB * 1e9 * hw.gpuCount : base;
+}
+
 /** floor((usable − fixed) / kvPerRequest); 0 when nothing is free. */
 export function maxUsers(usable: number, fixed: number, kvPerRequest: number): number {
   const free = usable - fixed;
@@ -55,6 +79,14 @@ export function maxUsers(usable: number, fixed: number, kvPerRequest: number): n
 /**
  * min(maxPositionEmbeddings, floor((usable − fixed) / (users × bytesPerTokenFull))).
  * Uses the full-attention rate (conservative; sliding layers only lower real use).
+ *
+ * For vLLM, a request's KV reservation rounds UP to the next 16-token block
+ * (`kvContextForRuntime`), so solving from the unrounded per-token rate can report a context
+ * whose actual (rounded) reservation overshoots `usable`. Rounding the memory-bound answer
+ * DOWN to a block multiple guarantees the reported context's real reservation still fits —
+ * see the proof in fit.test.ts's "vLLM max-context block rounding" tests. The
+ * `maxPositionEmbeddings` cap is never rounded: if the model's own max already fits, there is
+ * nothing to shrink.
  */
 export function maxContext(
   usable: number,
@@ -62,32 +94,36 @@ export function maxContext(
   users: number,
   bytesPerTokenFull: number,
   maxPositionEmbeddings: number,
+  runtime: RuntimeKey = 'generic',
 ): number {
   const free = usable - fixed;
   if (!(free > 0)) return 0;
   if (!(bytesPerTokenFull > 0)) return maxPositionEmbeddings;
   const n = Math.max(1, users);
-  return Math.min(maxPositionEmbeddings, Math.floor(free / (n * bytesPerTokenFull)));
+  const memoryBound = free / (n * bytesPerTokenFull);
+  const rounded = runtime === 'vllm' ? Math.floor(memoryBound / VLLM_KV_BLOCK_TOKENS) * VLLM_KV_BLOCK_TOKENS : Math.floor(memoryBound);
+  return Math.min(maxPositionEmbeddings, rounded);
 }
 
 export function calculate(state: CalcState): CalcResult {
-  const { model, quant, hardware, workload } = state;
+  const { model, quant, hardware, workload, runtime = 'generic' } = state;
   const users = Math.max(0, Math.floor(workload.concurrentUsers));
   const ctx = Math.max(0, Math.floor(workload.contextTokens));
+  const kvCtx = kvContextForRuntime(ctx, runtime); // == ctx for every profile except vLLM's block rounding
 
   // Tensor-parallel split: warns when numAttentionHeads can't divide evenly across gpuCount,
   // and scales KV bytes up when numKvHeads < gpuCount forces KV-head replication.
   const tensorParallel = checkTensorParallelSplit(model, hardware.gpuCount);
   const kvReplication = tensorParallel.kvReplicationFactor;
   const perToken = kvBytesPerToken(model, quant.kv) * kvReplication;
-  const perRequest = kvBytesForContext(model, ctx, quant.kv) * kvReplication;
+  const perRequest = kvBytesForContext(model, kvCtx, quant.kv) * kvReplication;
   const allUsers = perRequest * users;
   // Recomputed from the spec (not model.activeParams) so a manual edit stays consistent.
   const active = activeParamsDetailed(model);
   const resolved = resolveWeights(model, quant.weight, active.active);
   const weights = resolved.bytes;
-  const overhead = overheadBytes(hardware);
-  const usable = usableBytes(hardware);
+  const overhead = overheadBytesForRuntime(hardware, runtime);
+  const usable = usableBytesForRuntime(hardware, runtime);
   const fixed = weights + overhead;
   const total = fixed + allUsers;
 
@@ -96,7 +132,7 @@ export function calculate(state: CalcState): CalcResult {
   const contextTable = [...contexts]
     .sort((a, b) => a - b)
     .map((c) => {
-      const kvReq = kvBytesForContext(model, c, quant.kv) * kvReplication;
+      const kvReq = kvBytesForContext(model, kvContextForRuntime(c, runtime), quant.kv) * kvReplication;
       return { contextTokens: c, kvBytesPerRequest: kvReq, maxUsers: maxUsers(usable, fixed, kvReq) };
     });
 
@@ -137,7 +173,7 @@ export function calculate(state: CalcState): CalcResult {
     headroomBytes: usable - total,
     fits: total <= usable,
     maxUsersAtContext: maxUsers(usable, fixed, perRequest),
-    maxContextForUsers: maxContext(usable, fixed, users, perToken, model.maxPositionEmbeddings),
+    maxContextForUsers: maxContext(usable, fixed, users, perToken, model.maxPositionEmbeddings, runtime),
     contextTable,
     throughput,
     tensorParallel,

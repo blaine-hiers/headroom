@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { makeSpec } from './__fixtures__/makeSpec';
-import { calculate, effectiveVramGB, maxContext, maxUsers, overheadBytes, usableBytes } from './fit';
+import { calculate, effectiveVramGB, maxContext, maxUsers, overheadBytes, overheadBytesForRuntime, usableBytes, usableBytesForRuntime } from './fit';
 import { findGpuPreset } from './presets/gpus';
 import { findModelPreset } from './presets/models';
+import { SGLANG_MEM_FRACTION_STATIC, VLLM_GPU_MEMORY_UTILIZATION, VLLM_KV_BLOCK_TOKENS, VLLM_OVERHEAD_ALLOWANCE_GB } from './runtime';
 import { tensorParallelEfficiency } from './tensorParallel';
-import type { CalcState, HardwareSpec } from './types';
+import type { CalcState, HardwareSpec, ModelSpec } from './types';
 
 const h100x4: HardwareSpec = { gpuName: 'H100 SXM', gpuCount: 4, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 5, overheadGB: 1 };
 
@@ -14,6 +15,7 @@ function state(overrides: Partial<CalcState> = {}): CalcState {
     quant: { weight: 'bf16', kv: 'fp16' },
     hardware: h100x4,
     workload: { contextTokens: 8192, concurrentUsers: 4 },
+    runtime: 'generic',
     ...overrides,
   };
 }
@@ -220,6 +222,7 @@ describe('calculate', () => {
       quant: { weight: 'bf16', kv: 'fp16' },
       hardware: { gpuName: gpu.name, gpuCount: 1, vramGB: gpu.vramGB, bandwidthGBs: gpu.bandwidthGBs, tflopsBf16: gpu.tflopsBf16, reservePct: 5, overheadGB: 1 },
       workload: { contextTokens: 2048, concurrentUsers: 1 },
+      runtime: 'generic',
     });
     expect(r.throughput.perUserTokS).toBeGreaterThan(40);
     expect(r.throughput.perUserTokS).toBeLessThan(45);
@@ -284,5 +287,106 @@ describe('calculate', () => {
     const b = calculate(state({ model: moe })).throughput.perUserTokS;
     expect(b).toBeGreaterThan(a);
     expect(calculate(state({ model: moe })).weightBytes).toBe(60e9); // all experts resident
+  });
+});
+
+describe('runtime profiles: generic is bit-identical to today', () => {
+  it('usableBytesForRuntime/overheadBytesForRuntime match the plain (pre-runtime) formulas for generic', () => {
+    expect(usableBytesForRuntime(h100x4, 'generic')).toBe(usableBytes(h100x4));
+    expect(overheadBytesForRuntime(h100x4, 'generic')).toBe(overheadBytes(h100x4));
+    // llama.cpp and MLX reuse the same generic accounting (no reserve-% or overhead override).
+    expect(usableBytesForRuntime(h100x4, 'llamacpp')).toBe(usableBytes(h100x4));
+    expect(usableBytesForRuntime(h100x4, 'mlx')).toBe(usableBytes(h100x4));
+  });
+
+  it("calculate() with runtime: 'generic' produces every number the pre-runtime calculator did", () => {
+    const s = state();
+    const r = calculate(s);
+    expect(r.usableBytes).toBe(usableBytes(s.hardware));
+    expect(r.overheadBytes).toBe(overheadBytes(s.hardware));
+    expect(r.kvBytesPerRequest).toBe(r.kvBytesPerToken * s.workload.contextTokens);
+  });
+});
+
+describe('runtime profiles: vLLM usable-memory maths', () => {
+  it('usable = gpuCount × effectiveVramGB × 1e9 × gpu_memory_utilization, ignoring reservePct', () => {
+    const hw: HardwareSpec = { ...h100x4, reservePct: 40 }; // a high reserve % must have no effect under vLLM
+    expect(usableBytesForRuntime(hw, 'vllm')).toBeCloseTo(hw.gpuCount * hw.vramGB * 1e9 * VLLM_GPU_MEMORY_UTILIZATION, 0);
+  });
+
+  it('adds a flat CUDA-graph/activation overhead allowance on top of the generic overhead', () => {
+    expect(overheadBytesForRuntime(h100x4, 'vllm')).toBe(overheadBytes(h100x4) + VLLM_OVERHEAD_ALLOWANCE_GB * 1e9 * h100x4.gpuCount);
+  });
+
+  it('rounds the KV per request up to a 16-token block multiple', () => {
+    const withOddContext = calculate(state({ runtime: 'vllm', workload: { contextTokens: 8193, concurrentUsers: 1 } }));
+    const withRoundedContext = calculate(state({ runtime: 'generic', workload: { contextTokens: 8208, concurrentUsers: 1 } }));
+    expect(withOddContext.kvBytesPerRequest).toBe(withRoundedContext.kvBytesPerRequest);
+  });
+
+  it('does not round a context that is already a block multiple', () => {
+    const exact = calculate(state({ runtime: 'vllm', workload: { contextTokens: 8192, concurrentUsers: 1 } }));
+    const generic = calculate(state({ runtime: 'generic', workload: { contextTokens: 8192, concurrentUsers: 1 } }));
+    expect(exact.kvBytesPerRequest).toBe(generic.kvBytesPerRequest);
+  });
+});
+
+describe('runtime profiles: vLLM max-context block rounding', () => {
+  it('reports a context whose actual (block-rounded) KV reservation still fits under usable (repro: Llama 3.1 8B, H100 80GB, reserve 5%, overhead 1GB, N=4)', () => {
+    const model = findModelPreset('Llama 3.1 8B');
+    if (!model) throw new Error('missing preset');
+    const hardware: HardwareSpec = { gpuName: 'H100 SXM', gpuCount: 1, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 100, reservePct: 5, overheadGB: 1 };
+    // workload.contextTokens does not affect maxContextForUsers; any value probes it.
+    const probe = calculate(state({ model, hardware, runtime: 'vllm', workload: { contextTokens: 8192, concurrentUsers: 4 } }));
+    const C = probe.maxContextForUsers;
+    expect(C).toBeLessThan(model.maxPositionEmbeddings); // memory-bound in this scenario, not the model cap
+    expect(C % VLLM_KV_BLOCK_TOKENS).toBe(0);
+    const atC = calculate(state({ model, hardware, runtime: 'vllm', workload: { contextTokens: C, concurrentUsers: 4 } }));
+    expect(atC.totalBytes).toBeLessThanOrEqual(atC.usableBytes);
+  });
+
+  it('never overshoots usable across a range of models, hardware and user counts (that fit at all)', () => {
+    const llama8b = findModelPreset('Llama 3.1 8B');
+    if (!llama8b) throw new Error('missing preset');
+    const configs: Array<{ model: ModelSpec; hardware: HardwareSpec; users: number }> = [
+      { model: makeSpec(), hardware: h100x4, users: 4 }, // 70B dense, comfortably fits 4×H100
+      { model: llama8b, hardware: { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, tflopsBf16: 100, reservePct: 5, overheadGB: 1 }, users: 8 },
+      {
+        model: makeSpec({ numKvHeads: 32, headDim: 128, numLayers: 40 }),
+        hardware: { gpuName: 'H200', gpuCount: 2, vramGB: 141, bandwidthGBs: 4800, tflopsBf16: 100, reservePct: 10, overheadGB: 2 },
+        users: 16,
+      },
+    ];
+    for (const { model, hardware, users } of configs) {
+      const probe = calculate(state({ model, hardware, runtime: 'vllm', workload: { contextTokens: 4096, concurrentUsers: users } }));
+      const C = probe.maxContextForUsers;
+      // Sanity check the fixture: the model must actually fit before any context is asked for.
+      expect(probe.weightBytes + probe.overheadBytes).toBeLessThan(probe.usableBytes);
+      const atC = calculate(state({ model, hardware, runtime: 'vllm', workload: { contextTokens: C, concurrentUsers: users } }));
+      expect(atC.totalBytes).toBeLessThanOrEqual(atC.usableBytes);
+    }
+  });
+
+  it('non-vLLM runtimes keep the unrounded maxContext formula', () => {
+    for (const runtime of ['generic', 'llamacpp', 'sglang', 'mlx'] as const) {
+      expect(maxContext(1000, 0, 2, 10, 1_000_000, runtime)).toBe(50);
+    }
+    expect(maxContext(1000, 0, 2, 10, 1_000_000, 'vllm')).toBe(48); // 50 rounded down to a 16-token block
+  });
+});
+
+describe('runtime profiles: SGLang usable-memory maths', () => {
+  it('usable = gpuCount × effectiveVramGB × 1e9 × mem_fraction_static, ignoring reservePct', () => {
+    const hw: HardwareSpec = { ...h100x4, reservePct: 40 };
+    expect(usableBytesForRuntime(hw, 'sglang')).toBeCloseTo(hw.gpuCount * hw.vramGB * 1e9 * SGLANG_MEM_FRACTION_STATIC, 0);
+    expect(overheadBytesForRuntime(hw, 'sglang')).toBe(overheadBytes(hw)); // no extra allowance
+  });
+});
+
+describe('runtime profiles: MLX builds on the Apple wired-memory limit, not a duplicate', () => {
+  it('an Apple GPU gets the same effective VRAM under MLX as under generic', () => {
+    const apple: HardwareSpec = { gpuName: 'Apple M2 Ultra', gpuCount: 1, vramGB: 192, bandwidthGBs: 800, tflopsBf16: 100, reservePct: 5, overheadGB: 1 };
+    expect(usableBytesForRuntime(apple, 'mlx')).toBe(usableBytesForRuntime(apple, 'generic'));
+    expect(effectiveVramGB(apple.gpuName, apple.vramGB)).toBeLessThan(apple.vramGB); // wired limit applied
   });
 });

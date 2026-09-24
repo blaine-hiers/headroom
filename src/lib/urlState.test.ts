@@ -11,6 +11,7 @@ const fallback: CalcState = {
   quant: { weight: 'bf16', kv: 'fp16' },
   hardware: { gpuName: 'RTX 4090', gpuCount: 1, vramGB: 24, bandwidthGBs: 1008, tflopsBf16: 165.0, reservePct: 5, overheadGB: 1 },
   workload: { contextTokens: 8192, concurrentUsers: 1 },
+  runtime: 'generic',
 };
 
 describe('urlState', () => {
@@ -21,6 +22,7 @@ describe('urlState', () => {
         quant: { weight: 'q4_k_m', kv: 'fp8' },
         hardware: { gpuName: 'H100 SXM', gpuCount: 8, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 7.5, overheadGB: 1.25 },
         workload: { contextTokens: 32768, concurrentUsers: 16 },
+        runtime: 'vllm',
       };
       const qs = encodeState(s);
       expect(decodeState(qs, fallback)).toEqual(s);
@@ -113,6 +115,21 @@ describe('urlState', () => {
     expect(decoded.hardware.tflopsBf16).toBe(100);
   });
 
+  it('round-trips every runtime profile', () => {
+    for (const runtime of ['generic', 'vllm', 'llamacpp', 'sglang', 'mlx'] as const) {
+      const s: CalcState = { ...fallback, runtime };
+      expect(decodeState(encodeState(s), fallback)).toEqual(s);
+    }
+  });
+
+  it('a URL with no runtime key decodes as generic, with identical numbers to today', () => {
+    const qs = encodeState(fallback).replace(/&rt=[^&]*/, '');
+    expect(qs).not.toContain('rt=');
+    const decoded = decodeState(qs, fallback);
+    expect(decoded.runtime).toBe('generic');
+    expect(decoded).toEqual({ ...fallback, runtime: 'generic' });
+  });
+
   it('bad input → fallback', () => {
     expect(decodeState('', fallback)).toBe(fallback);
     expect(decodeState('garbage', fallback)).toBe(fallback);
@@ -121,6 +138,7 @@ describe('urlState', () => {
     expect(decodeState(good.replace('c=8192', 'c=abc'), fallback)).toBe(fallback);
     expect(decodeState(good.replace('c=8192', 'c='), fallback)).toBe(fallback);
     expect(decodeState(good.replace('at=mha_gqa', 'at=weird'), fallback)).toBe(fallback);
+    expect(decodeState(good.replace('rt=generic', 'rt=nope'), fallback)).toBe(fallback);
     expect(decodeState(good.replace(/&u=\d+/, ''), fallback)).toBe(fallback);
     expect(decodeState(`${good}&moe=1,2`, fallback)).toBe(fallback);
     expect(decodeState(`${good}&ff=1,2,1`, fallback)).toBe(fallback);

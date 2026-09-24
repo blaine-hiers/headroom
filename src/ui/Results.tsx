@@ -2,6 +2,7 @@ import { effectiveBitsPerWeight, formatNumber, formatSeconds, formatTokens, KV_Q
 import type { ActiveParamsMethod, CalcResult, CalcState } from '../lib';
 import { Bytes } from './Bytes';
 import { Chart } from './Chart';
+import { LaunchCommand } from './LaunchCommand';
 import { ShowTheMath } from './ShowTheMath';
 import { fitLevel } from './state';
 
@@ -207,6 +208,7 @@ export function Results({ state, result }: Props) {
       </div>
 
       <Chart result={result} users={N} />
+      <LaunchCommand state={state} />
       <ShowTheMath state={state} result={result} />
       <p className="caveat muted">Estimates, not benchmarks. Real runtimes add activation memory, fragmentation, and their own KV block rounding.</p>
     </div>

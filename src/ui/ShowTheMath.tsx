@@ -6,9 +6,16 @@ import {
   findGpuPreset,
   formatNumber,
   formatSeconds,
+  kvContextForRuntime,
   KV_QUANTS,
   kvBytesPerTokenPerLayer,
+  llamaCppPerSlotContext,
+  RUNTIME_PROFILES,
+  SGLANG_MEM_FRACTION_STATIC,
   TP_PENALTY_PER_DOUBLING,
+  VLLM_GPU_MEMORY_UTILIZATION,
+  VLLM_KV_BLOCK_TOKENS,
+  VLLM_OVERHEAD_ALLOWANCE_GB,
   WEIGHT_QUANTS,
 } from '../lib';
 import type { ActiveParamsMethod, CalcResult, CalcState } from '../lib';
@@ -65,7 +72,7 @@ function ActiveParamsStep({ state, active, method }: { state: CalcState; active:
 }
 
 export function ShowTheMath({ state, result }: Props) {
-  const { model, quant, hardware: hw, workload } = state;
+  const { model, quant, hardware: hw, workload, runtime = 'generic' } = state;
   const kvB = KV_QUANTS[quant.kv].bytesPerElement;
   const bits = WEIGHT_QUANTS[quant.weight].bitsPerWeight;
   const tp = result.tensorParallel;
@@ -77,6 +84,7 @@ export function ShowTheMath({ state, result }: Props) {
   const full = model.numLayers - sliding;
   const C = Math.floor(workload.contextTokens);
   const N = Math.floor(workload.concurrentUsers);
+  const kvCtx = kvContextForRuntime(C, runtime);
   const fixed = result.weightBytes + result.overheadBytes;
   const active = result.activeParams;
   const method = result.activeParamsMethod;
@@ -89,6 +97,21 @@ export function ShowTheMath({ state, result }: Props) {
   const isAppleGpu = gpu?.vendor === 'apple';
   const effectiveVram = effectiveVramGB(hw.gpuName, hw.vramGB, hw.appleWiredLimitGB);
   const appleNote = isAppleGpu && hw.vramGB !== effectiveVram ? ` (using wired limit ${n(effectiveVram, 2)} GB)` : '';
+
+  const usableFormula =
+    runtime === 'vllm'
+      ? `gpuCount × effectiveVramGB × 1e9 × gpu_memory_utilization (${VLLM_GPU_MEMORY_UTILIZATION})`
+      : runtime === 'sglang'
+        ? `gpuCount × effectiveVramGB × 1e9 × mem_fraction_static (${SGLANG_MEM_FRACTION_STATIC})`
+        : isAppleGpu
+          ? 'gpuCount × effectiveVramGB × 1e9 × (1 − reserve%/100)'
+          : 'gpuCount × vramGB × 1e9 × (1 − reserve%/100)';
+  const usableSub =
+    runtime === 'vllm'
+      ? `${n(hw.gpuCount)} × ${n(effectiveVram, 2)} × 1e9 × ${VLLM_GPU_MEMORY_UTILIZATION}`
+      : runtime === 'sglang'
+        ? `${n(hw.gpuCount)} × ${n(effectiveVram, 2)} × 1e9 × ${SGLANG_MEM_FRACTION_STATIC}`
+        : `${n(hw.gpuCount)} × ${n(effectiveVram, 2)} × 1e9 × (1 − ${n(hw.reservePct, 2)}/100)`;
 
   return (
     <details className="card math">
@@ -117,19 +140,35 @@ export function ShowTheMath({ state, result }: Props) {
             result={<>{n(result.kvBytesPerToken)} B ({B(result.kvBytesPerToken)})</>}
           />
         )}
+        {runtime === 'vllm' && kvCtx !== C && (
+          <Step
+            title="Context rounded to vLLM's paged-KV block size"
+            formula={`ceil(C / ${VLLM_KV_BLOCK_TOKENS}) × ${VLLM_KV_BLOCK_TOKENS}`}
+            sub={`ceil(${n(C)} / ${VLLM_KV_BLOCK_TOKENS}) × ${VLLM_KV_BLOCK_TOKENS}`}
+            result={`${n(kvCtx)} tokens`}
+          />
+        )}
         {sliding > 0 ? (
           <Step
             title="KV per request (sliding-window split)"
             formula="perLayer × (fullLayers × C + slidingLayers × min(C, window))"
-            sub={`${n(perLayer)} × (${n(full)} × ${n(C)} + ${n(sliding)} × ${n(Math.min(C, model.slidingWindow ?? 0))})`}
+            sub={`${n(perLayer)} × (${n(full)} × ${n(kvCtx)} + ${n(sliding)} × ${n(Math.min(kvCtx, model.slidingWindow ?? 0))})`}
             result={B(result.kvBytesPerRequest)}
           />
         ) : (
           <Step
             title="KV per request"
             formula="KV per token × C"
-            sub={`${n(result.kvBytesPerToken)} × ${n(C)}`}
+            sub={`${n(result.kvBytesPerToken)} × ${n(kvCtx)}`}
             result={B(result.kvBytesPerRequest)}
+          />
+        )}
+        {runtime === 'llamacpp' && (
+          <Step
+            title="Per-slot context (llama.cpp: -c shared across -np slots)"
+            formula="floor((C × N) / N)"
+            sub={`floor((${n(C)} × ${n(N)}) / ${n(N)})`}
+            result={`${n(llamaCppPerSlotContext(C * N, N))} tokens${llamaCppPerSlotContext(C * N, N) < C ? ' — below the chosen context' : ''}`}
           />
         )}
         <Step title="KV for all users" formula="KV per request × N" sub={`${n(result.kvBytesPerRequest)} × ${n(N)}`} result={B(result.kvBytesAllUsers)} />
@@ -149,18 +188,29 @@ export function ShowTheMath({ state, result }: Props) {
           />
         )}
         <Step
-          title={`Usable VRAM${appleNote}`}
-          formula={isAppleGpu ? "gpuCount × effectiveVramGB × 1e9 × (1 − reserve%/100)" : "gpuCount × vramGB × 1e9 × (1 − reserve%/100)"}
-          sub={`${n(hw.gpuCount)} × ${n(effectiveVram, 2)} × 1e9 × (1 − ${n(hw.reservePct, 2)}/100)`}
+          title={`Usable VRAM (${RUNTIME_PROFILES[runtime].label})${appleNote}`}
+          formula={usableFormula}
+          sub={usableSub}
           result={B(result.usableBytes)}
         />
         <Step
           title="Total VRAM"
-          formula="weights + overheadGB × 1e9 × gpuCount + N × KV per request"
+          formula={
+            runtime === 'vllm'
+              ? `weights + (overheadGB × 1e9 × gpuCount + ${VLLM_OVERHEAD_ALLOWANCE_GB} × 1e9 × gpuCount) + N × KV per request`
+              : 'weights + overheadGB × 1e9 × gpuCount + N × KV per request'
+          }
           sub={
-            <>
-              {formatNumber(result.weightBytes)} + {n(hw.overheadGB, 2)} × 1e9 × {n(hw.gpuCount)} + {n(N)} × {n(result.kvBytesPerRequest)}
-            </>
+            runtime === 'vllm' ? (
+              <>
+                {formatNumber(result.weightBytes)} + ({n(hw.overheadGB, 2)} × 1e9 × {n(hw.gpuCount)} + {VLLM_OVERHEAD_ALLOWANCE_GB} × 1e9 × {n(hw.gpuCount)}) + {n(N)}{' '}
+                × {n(result.kvBytesPerRequest)}
+              </>
+            ) : (
+              <>
+                {formatNumber(result.weightBytes)} + {n(hw.overheadGB, 2)} × 1e9 × {n(hw.gpuCount)} + {n(N)} × {n(result.kvBytesPerRequest)}
+              </>
+            )
           }
           result={
             <>
@@ -176,9 +226,17 @@ export function ShowTheMath({ state, result }: Props) {
         />
         <Step
           title="Max context for N users"
-          formula="min(maxPosition, floor((usable − fixed) / (N × KV per token)))"
-          sub={`min(${n(model.maxPositionEmbeddings)}, floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)})))`}
-          result={`${n(result.maxContextForUsers)} tokens`}
+          formula={
+            runtime === 'vllm'
+              ? `min(maxPosition, ${VLLM_KV_BLOCK_TOKENS} × floor((usable − fixed) / (N × KV per token) / ${VLLM_KV_BLOCK_TOKENS}))`
+              : 'min(maxPosition, floor((usable − fixed) / (N × KV per token)))'
+          }
+          sub={
+            runtime === 'vllm'
+              ? `min(${n(model.maxPositionEmbeddings)}, ${VLLM_KV_BLOCK_TOKENS} × floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)}) / ${VLLM_KV_BLOCK_TOKENS}))`
+              : `min(${n(model.maxPositionEmbeddings)}, floor((${n(result.usableBytes)} − ${n(fixed)}) / (${n(Math.max(1, N))} × ${n(result.kvBytesPerToken)})))`
+          }
+          result={`${n(result.maxContextForUsers)} tokens${runtime === 'vllm' ? ' (rounded down to a block multiple, so it always fits)' : ''}`}
         />
         <ActiveParamsStep state={state} active={active} method={method} />
         {fromFiles && model.params > 0 && (
