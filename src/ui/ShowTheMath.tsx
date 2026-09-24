@@ -3,6 +3,8 @@ import {
   attentionParamsPerLayer,
   DECODE_EFFICIENCY,
   effectiveSlidingLayers,
+  effectiveVramGB,
+  findGpuPreset,
   formatNumber,
   KV_QUANTS,
   kvBytesPerTokenPerLayer,
@@ -78,6 +80,11 @@ export function ShowTheMath({ state, result }: Props) {
   const B = (v: number) => <Bytes value={v} />;
   const maxU = result.maxUsersAtContext;
 
+  const gpu = findGpuPreset(hw.gpuName);
+  const isAppleGpu = gpu?.vendor === 'apple';
+  const effectiveVram = effectiveVramGB(hw.gpuName, hw.vramGB, hw.appleWiredLimitGB);
+  const appleNote = isAppleGpu && hw.vramGB !== effectiveVram ? ` (using wired limit ${n(effectiveVram, 2)} GB)` : '';
+
   return (
     <details className="card math">
       <summary>Show the math</summary>
@@ -120,9 +127,9 @@ export function ShowTheMath({ state, result }: Props) {
           result={B(result.weightBytes)}
         />
         <Step
-          title="Usable VRAM"
-          formula="gpuCount × vramGB × 1e9 × (1 − reserve%/100)"
-          sub={`${n(hw.gpuCount)} × ${n(hw.vramGB, 2)} × 1e9 × (1 − ${n(hw.reservePct, 2)}/100)`}
+          title={`Usable VRAM${appleNote}`}
+          formula={isAppleGpu ? "gpuCount × effectiveVramGB × 1e9 × (1 − reserve%/100)" : "gpuCount × vramGB × 1e9 × (1 − reserve%/100)"}
+          sub={`${n(hw.gpuCount)} × ${n(effectiveVram, 2)} × 1e9 × (1 − ${n(hw.reservePct, 2)}/100)`}
           result={B(result.usableBytes)}
         />
         <Step
