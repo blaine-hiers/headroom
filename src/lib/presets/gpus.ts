@@ -9,6 +9,12 @@ export interface GpuPreset {
   bandwidthGBs: number;
   /** Per GPU, dense (no sparsity) BF16 tensor TFLOPS; used for the prefill/TTFT estimate. */
   tflopsBf16: number;
+  /**
+   * Typical on-demand cloud list price per GPU per hour, USD. Datacenter parts only —
+   * consumer/workstation cards, Apple and DGX Spark are bought, not rented by the GPU-hour.
+   * Approximate and dated; see the per-entry comments below for the source and date.
+   */
+  usdPerHour?: number;
 }
 
 export const CUSTOM_GPU_NAME = 'Custom';
@@ -36,18 +42,21 @@ export const GPU_PRESETS: GpuPreset[] = [
   { name: 'RTX 6000 Ada', vendor: 'nvidia-consumer', vramGB: 48, bandwidthGBs: 960, tflopsBf16: 364.0 }, // RTX 6000 Ada datasheet: 1457 TFLOPS FP8 with sparsity, halved for dense and again for FP16. Workstation cards run FP32 accumulate at full rate, unlike GeForce (cf. L40S, same AD102)
   { name: 'RTX PRO 6000 Blackwell', vendor: 'nvidia-consumer', vramGB: 96, bandwidthGBs: 1792, tflopsBf16: 500.0 }, // estimate: datasheet 4000 AI TOPS (FP4 with sparsity) halved for dense, FP8 and FP16. Workstation cards run FP32 accumulate at full rate, unlike GeForce
   // NVIDIA datacenter
-  { name: 'L4', vendor: 'nvidia-datacenter', vramGB: 24, bandwidthGBs: 300, tflopsBf16: 121.0 }, // NVIDIA L4 datasheet (FP16 Tensor Core, dense)
-  { name: 'L40S', vendor: 'nvidia-datacenter', vramGB: 48, bandwidthGBs: 864, tflopsBf16: 362.0 }, // NVIDIA L40S datasheet (FP16 Tensor Core, dense)
-  { name: 'A10', vendor: 'nvidia-datacenter', vramGB: 24, bandwidthGBs: 600, tflopsBf16: 125.0 }, // NVIDIA A10 datasheet (FP16 Tensor Core, dense)
-  { name: 'A100 40GB', vendor: 'nvidia-datacenter', vramGB: 40, bandwidthGBs: 1555, tflopsBf16: 312.0 }, // NVIDIA A100 datasheet (FP16/BF16 Tensor Core, dense)
-  { name: 'A100 80GB', vendor: 'nvidia-datacenter', vramGB: 80, bandwidthGBs: 2039, tflopsBf16: 312.0 }, // NVIDIA A100 datasheet (FP16/BF16 Tensor Core, dense)
-  { name: 'H100 PCIe', vendor: 'nvidia-datacenter', vramGB: 80, bandwidthGBs: 2000, tflopsBf16: 756.5 }, // NVIDIA H100 datasheet (FP16/BF16 Tensor Core, dense)
-  { name: 'H100 SXM', vendor: 'nvidia-datacenter', vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5 }, // NVIDIA H100 datasheet (FP16/BF16 Tensor Core, dense)
-  { name: 'H200', vendor: 'nvidia-datacenter', vramGB: 141, bandwidthGBs: 4800, tflopsBf16: 989.5 }, // Same Hopper compute die as H100 SXM
-  { name: 'B200', vendor: 'nvidia-datacenter', vramGB: 192, bandwidthGBs: 8000, tflopsBf16: 2250.0 }, // NVIDIA Blackwell architecture whitepaper (FP16/BF16 Tensor Core, dense)
+  // usdPerHour: median on-demand list price per GPU-hour across cloud providers, prices as of
+  // 2026-09 (aimultiple.com/gpu-index, getdeploying.com, spheron.network and shattered.io GPU
+  // pricing roundups). Approximate and moves with the market — shown in the UI as such.
+  { name: 'L4', vendor: 'nvidia-datacenter', vramGB: 24, bandwidthGBs: 300, tflopsBf16: 121.0, usdPerHour: 0.89 }, // NVIDIA L4 datasheet (FP16 Tensor Core, dense)
+  { name: 'L40S', vendor: 'nvidia-datacenter', vramGB: 48, bandwidthGBs: 864, tflopsBf16: 362.0, usdPerHour: 1.5 }, // NVIDIA L40S datasheet (FP16 Tensor Core, dense)
+  { name: 'A10', vendor: 'nvidia-datacenter', vramGB: 24, bandwidthGBs: 600, tflopsBf16: 125.0, usdPerHour: 1.42 }, // NVIDIA A10 datasheet (FP16 Tensor Core, dense)
+  { name: 'A100 40GB', vendor: 'nvidia-datacenter', vramGB: 40, bandwidthGBs: 1555, tflopsBf16: 312.0, usdPerHour: 1.4 }, // NVIDIA A100 datasheet (FP16/BF16 Tensor Core, dense)
+  { name: 'A100 80GB', vendor: 'nvidia-datacenter', vramGB: 80, bandwidthGBs: 2039, tflopsBf16: 312.0, usdPerHour: 1.76 }, // NVIDIA A100 datasheet (FP16/BF16 Tensor Core, dense)
+  { name: 'H100 PCIe', vendor: 'nvidia-datacenter', vramGB: 80, bandwidthGBs: 2000, tflopsBf16: 756.5, usdPerHour: 2.85 }, // NVIDIA H100 datasheet (FP16/BF16 Tensor Core, dense)
+  { name: 'H100 SXM', vendor: 'nvidia-datacenter', vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, usdPerHour: 3.25 }, // NVIDIA H100 datasheet (FP16/BF16 Tensor Core, dense)
+  { name: 'H200', vendor: 'nvidia-datacenter', vramGB: 141, bandwidthGBs: 4800, tflopsBf16: 989.5, usdPerHour: 4.4 }, // Same Hopper compute die as H100 SXM
+  { name: 'B200', vendor: 'nvidia-datacenter', vramGB: 192, bandwidthGBs: 8000, tflopsBf16: 2250.0, usdPerHour: 6.52 }, // NVIDIA Blackwell architecture whitepaper (FP16/BF16 Tensor Core, dense)
   // AMD
-  { name: 'AMD MI300X', vendor: 'amd', vramGB: 192, bandwidthGBs: 5300, tflopsBf16: 1307.4 }, // AMD MI300X datasheet (FP16/BF16 Matrix, dense)
-  { name: 'Radeon RX 7900 XTX', vendor: 'amd', vramGB: 24, bandwidthGBs: 960, tflopsBf16: 122.8 }, // RDNA 3 datasheet (FP16 w/ FP16 accumulate)
+  { name: 'AMD MI300X', vendor: 'amd', vramGB: 192, bandwidthGBs: 5300, tflopsBf16: 1307.4, usdPerHour: 2.91 }, // AMD MI300X datasheet (FP16/BF16 Matrix, dense)
+  { name: 'Radeon RX 7900 XTX', vendor: 'amd', vramGB: 24, bandwidthGBs: 960, tflopsBf16: 122.8 }, // RDNA 3 datasheet (FP16 w/ FP16 accumulate); consumer card, no cloud rental price
   // Apple (unified memory) — estimate: GPU core count × ALU count × clock, doubled for FP16
   { name: 'Apple M4 Max', vendor: 'apple', vramGB: 128, bandwidthGBs: 546, tflopsBf16: 34.0 }, // estimate
   { name: 'Apple M3 Ultra', vendor: 'apple', vramGB: 512, bandwidthGBs: 819, tflopsBf16: 58.0 }, // estimate

@@ -1,11 +1,13 @@
 import type { ReactNode } from 'react';
 import {
   attentionParamsPerLayer,
+  calculateCloudCost,
   effectiveSlidingLayers,
   effectiveVramGB,
   findGpuPreset,
   formatNumber,
   formatSeconds,
+  formatUsd,
   KV_QUANTS,
   kvBytesPerTokenPerLayer,
   TP_PENALTY_PER_DOUBLING,
@@ -89,6 +91,17 @@ export function ShowTheMath({ state, result }: Props) {
   const isAppleGpu = gpu?.vendor === 'apple';
   const effectiveVram = effectiveVramGB(hw.gpuName, hw.vramGB, hw.appleWiredLimitGB);
   const appleNote = isAppleGpu && hw.vramGB !== effectiveVram ? ` (using wired limit ${n(effectiveVram, 2)} GB)` : '';
+
+  const cost = calculateCloudCost({
+    usdPerHour: hw.usdPerHour,
+    gpuCount: hw.gpuCount,
+    bandwidthGBs: hw.bandwidthGBs,
+    activeWeightBytes: activeBytes,
+    kvBytesPerRequest: result.kvBytesPerRequest,
+    efficiency: result.throughput.efficiency,
+    aggregateTokS: result.throughput.aggregateTokS,
+    maxUsersAtContext: maxU,
+  });
 
   return (
     <details className="card math">
@@ -207,6 +220,20 @@ export function ShowTheMath({ state, result }: Props) {
           }
           result={`${n(result.throughput.perUserTokS, 1)} tok/s per user, ${n(result.throughput.aggregateTokS, 1)} tok/s aggregate`}
         />
+        {cost && (
+          <Step
+            title="Cloud cost"
+            formula="costPerHour = usdPerHour × gpuCount; $/1M output tokens = costPerHour / (aggregateTokS × 3600) × 1e6"
+            sub={`${n(hw.usdPerHour ?? 0, 2)} × ${n(hw.gpuCount)}; ${formatUsd(cost.costPerHour)} / (${n(result.throughput.aggregateTokS, 1)} × 3600) × 1e6`}
+            result={
+              <>
+                {formatUsd(cost.costPerHour)}/hr, {cost.atCurrentUsers !== undefined ? `${formatUsd(cost.atCurrentUsers)}/1M tok at N users` : '—'}, best case at max users
+                {' '}
+                {cost.atMaxUsers !== undefined ? `${formatUsd(cost.atMaxUsers)}/1M tok` : '—'}
+              </>
+            }
+          />
+        )}
         <Step
           title={`Prefill / time to first token (compute-bound, BF16${result.prefill.headsSource === 'hiddenSize-fallback' ? ', head count unknown → hiddenSize used' : ''})`}
           formula="[2 × activeParams × C + 2 × layers × C² × queryWidth] / (tflopsBf16 × 1e12 × gpuCount × MFU)"

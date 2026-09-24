@@ -95,6 +95,8 @@ export function reducer(state: CalcState, action: Action): CalcState {
           hw.vramGB = preset.vramGB;
           hw.bandwidthGBs = preset.bandwidthGBs;
           hw.tflopsBf16 = preset.tflopsBf16;
+          // Pre-filled from the preset; undefined for GPUs with no listed cloud price (consumer cards).
+          hw.usdPerHour = preset.usdPerHour;
         }
       } else if (p.gpuName === undefined && (p.vramGB !== undefined || p.bandwidthGBs !== undefined || p.tflopsBf16 !== undefined)) {
         hw.gpuName = CUSTOM_GPU_NAME;
@@ -162,20 +164,22 @@ export function initialState(search: string): CalcState {
   const hw = s.hardware;
   const model = clampModel(s.model);
   model.warnings = refreshWarnings(model);
+  const hardware: HardwareSpec = {
+    ...hw,
+    // An unknown GPU name keeps the link's VRAM and bandwidth under the Custom entry.
+    gpuName: findGpuPreset(hw.gpuName) ? hw.gpuName : CUSTOM_GPU_NAME,
+    gpuCount: Math.round(clamp(hw.gpuCount, 1, MAX_GPUS)),
+    vramGB: clamp(hw.vramGB, 0.1, 4096),
+    bandwidthGBs: clamp(hw.bandwidthGBs, 1, 100000),
+    tflopsBf16: clamp(hw.tflopsBf16, 0.1, 100000),
+    reservePct: clamp(hw.reservePct, 0, 50),
+    overheadGB: clamp(hw.overheadGB, 0, 8),
+  };
+  if (hw.usdPerHour !== undefined) hardware.usdPerHour = clamp(hw.usdPerHour, 0.01, 1000);
   return {
     ...s,
     model,
-    hardware: {
-      ...hw,
-      // An unknown GPU name keeps the link's VRAM and bandwidth under the Custom entry.
-      gpuName: findGpuPreset(hw.gpuName) ? hw.gpuName : CUSTOM_GPU_NAME,
-      gpuCount: Math.round(clamp(hw.gpuCount, 1, MAX_GPUS)),
-      vramGB: clamp(hw.vramGB, 0.1, 4096),
-      bandwidthGBs: clamp(hw.bandwidthGBs, 1, 100000),
-      tflopsBf16: clamp(hw.tflopsBf16, 0.1, 100000),
-      reservePct: clamp(hw.reservePct, 0, 50),
-      overheadGB: clamp(hw.overheadGB, 0, 8),
-    },
+    hardware,
     workload: clampWorkload(s.workload, model),
   };
 }

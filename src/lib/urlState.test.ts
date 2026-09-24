@@ -19,7 +19,10 @@ describe('urlState', () => {
       const s: CalcState = {
         model,
         quant: { weight: 'q4_k_m', kv: 'fp8' },
-        hardware: { gpuName: 'H100 SXM', gpuCount: 8, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 7.5, overheadGB: 1.25 },
+        // H100 SXM has a preset usdPerHour, so it must be set here too: without a "up" param
+        // of its own, decodeState falls back to the named preset's price (issue #16), and an
+        // omitted field would otherwise fail to round-trip exactly.
+        hardware: { gpuName: 'H100 SXM', gpuCount: 8, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 7.5, overheadGB: 1.25, usdPerHour: findGpuPreset('H100 SXM')?.usdPerHour },
         workload: { contextTokens: 32768, concurrentUsers: 16 },
       };
       const qs = encodeState(s);
@@ -92,6 +95,37 @@ describe('urlState', () => {
     // The awl param is preserved in the URL state, but effectiveVramGB will ignore it for non-Apple GPUs
     // (In the UI, HardwarePanel clears it when switching GPU selection)
     expect(decoded.hardware.appleWiredLimitGB).toBe(120);
+  });
+
+  it('round-trips a cloud cost price', () => {
+    const s: CalcState = {
+      ...fallback,
+      hardware: { gpuName: 'H100 SXM', gpuCount: 1, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 5, overheadGB: 1, usdPerHour: 3.25 },
+    };
+    const qs = encodeState(s);
+    expect(qs).toContain('up=3.25');
+    expect(decodeState(qs, fallback)).toEqual(s);
+  });
+
+  it('omits the cloud cost price when undefined', () => {
+    const qs = encodeState(fallback);
+    expect(qs).not.toContain('up=');
+    expect(decodeState(qs, fallback)).toEqual(fallback);
+  });
+
+  it('an old link without usdPerHour (issue #16) falls back to the named GPU preset price', () => {
+    const s: CalcState = { ...fallback, hardware: { ...fallback.hardware, gpuName: 'H100 SXM' } };
+    const qs = encodeState(s).replace(/&?up=[^&]*/, '');
+    expect(qs).not.toContain('up=');
+    const decoded = decodeState(qs, fallback);
+    expect(decoded.hardware.usdPerHour).toBe(findGpuPreset('H100 SXM')?.usdPerHour);
+  });
+
+  it('an old link for a GPU with no listed price stays undefined', () => {
+    // RTX 4090 is a consumer card with no usdPerHour preset value.
+    const qs = encodeState(fallback);
+    const decoded = decodeState(qs, fallback);
+    expect(decoded.hardware.usdPerHour).toBeUndefined();
   });
 
   it('an old link without tflopsBf16 (issue #11) still decodes, from the named GPU preset', () => {

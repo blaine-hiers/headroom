@@ -79,6 +79,28 @@ export function HardwarePanel({ hardware, onChange }: Props) {
         onChange={(v) => onChange({ gpuCount: v })}
         help="Multi-GPU assumes tensor parallel: VRAM and bandwidth add."
       />
+      <div className="field">
+        <label htmlFor={`${gpuId}-cost`}>Cloud cost</label>
+        <div className="input-wrap">
+          <input
+            id={`${gpuId}-cost`}
+            type="number"
+            min="0.01"
+            max="1000"
+            step="0.01"
+            value={hardware.usdPerHour ?? ''}
+            onChange={(e) => {
+              const v = e.target.value.trim();
+              onChange({ usdPerHour: v === '' ? undefined : Math.max(0.01, Math.min(1000, Number(v))) });
+            }}
+            placeholder="e.g. 3.25"
+          />
+          <span className="suffix">$/GPU-hr</span>
+        </div>
+        <p className="help">
+          Typical on-demand list price, pre-filled from the preset (prices as of 2026-09, approximate). Leave blank to hide the cost card.
+        </p>
+      </div>
       <div className="grid2">
         <NumberField
           label="Reserve"

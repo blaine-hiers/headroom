@@ -38,6 +38,16 @@ describe('GPU presets', () => {
       expect(g.tflopsBf16, g.name).toBeLessThan(3000);
     }
   });
+
+  it('only datacenter parts (and AMD MI300X) carry a cloud price; consumer/Apple/other stay blank', () => {
+    for (const g of GPU_PRESETS) {
+      if (g.vendor === 'nvidia-datacenter' || g.name === 'AMD MI300X') {
+        expect(g.usdPerHour, g.name).toBeGreaterThan(0);
+      } else {
+        expect(g.usdPerHour, g.name).toBeUndefined();
+      }
+    }
+  });
 });
 
 describe('model presets', () => {

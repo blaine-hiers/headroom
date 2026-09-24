@@ -150,6 +150,8 @@ export interface HardwareSpec {
   overheadGB: number;
   /** Apple GPU wired memory limit per GPU in GB (only applies to Apple GPUs). Optional; when omitted, the default OS limit is applied. */
   appleWiredLimitGB?: number;
+  /** On-demand cloud list price per GPU per hour, USD. Optional; the cost card is hidden without it. */
+  usdPerHour?: number;
 }
 
 export interface Workload {

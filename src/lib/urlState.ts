@@ -42,6 +42,7 @@ const K = {
   reservePct: 'rp',
   overheadGB: 'oh',
   appleWiredLimitGB: 'awl',
+  usdPerHour: 'up',
   contextTokens: 'c',
   concurrentUsers: 'u',
   fileWeightBytes: 'fwb',
@@ -95,6 +96,7 @@ export function encodeState(state: CalcState): string {
   set(K.reservePct, h.reservePct);
   set(K.overheadGB, h.overheadGB);
   set(K.appleWiredLimitGB, h.appleWiredLimitGB);
+  set(K.usdPerHour, h.usdPerHour);
   set(K.contextTokens, state.workload.contextTokens);
   set(K.concurrentUsers, state.workload.concurrentUsers);
   return q.toString();
@@ -219,6 +221,11 @@ export function decodeState(qs: string, fallback: CalcState): CalcState {
         };
         const appleWiredLimit = optNum(K.appleWiredLimitGB);
         if (appleWiredLimit !== undefined) (hw as any).appleWiredLimitGB = appleWiredLimit;
+        // New key (issue #16): a link shared before the cost card existed has no "up" param.
+        // Falling back to the named GPU's own preset price (when it has one) keeps an old H100
+        // link's cost card populated instead of hiding it for no reason.
+        const usdPerHour = optNum(K.usdPerHour) ?? findGpuPreset(str(K.gpuName))?.usdPerHour;
+        if (usdPerHour !== undefined) (hw as any).usdPerHour = usdPerHour;
         return hw;
       })(),
       workload: {

@@ -9,6 +9,7 @@ Headroom is a local-LLM VRAM and KV-cache calculator. Give it a Hugging Face rep
 - total VRAM for N concurrent users, compared with usable VRAM
 - the most users that fit at your context, and the longest context that fits for your users
 - a bandwidth-bound decode-speed estimate
+- optionally, a cloud cost: $/hour and $ per million output tokens, given a $/GPU-hour price
 
 It runs entirely in the browser. There is no backend and no account. The whole calculator state lives in the URL, so you can share a link to it.
 
@@ -118,6 +119,12 @@ The file figure only applies while the weight quant is the one the files are in.
 - `TTFT = prefillFlops / (tflopsBf16 × 1e12 × gpuCount × MFU)`, with `MFU` (model FLOPS utilization) defaulting to **0.4**, labelled as such. `tflopsBf16` is the GPU's dense (no-sparsity) BF16 tensor rate; the estimate keeps that rate even at lower weight quants (an fp8 rate would need a separate GPU field).
 - Shown for one user at the chosen context, next to the decode throughput, as a compute-bound estimate.
 
+**Cloud cost** (optional: only shown once a $/GPU-hour price is set)
+- `costPerHour = usdPerHour × gpuCount`
+- `$ per 1M output tokens = costPerHour / (aggregateTokS × 3600) × 1e6`, guarded against a zero or non-finite `aggregateTokS` (shown as "—" rather than Infinity).
+- Shown at the chosen concurrent-user count, and again at `maxUsersAtContext` as the best case, since more concurrent users amortize the fixed weight read over more output tokens (recomputed with the decode-throughput formula above at that user count).
+- The Hardware panel's **Cloud cost** field pre-fills from the GPU preset's `usdPerHour` (datacenter NVIDIA and AMD MI300X only — consumer/workstation cards, Apple and DGX Spark are bought, not rented by the hour) and is left blank for Custom. It is a typical on-demand cloud list price, **approximate and dated (prices as of 2026-09)** — not a quote. Clear it to hide the cost card.
+
 ## Where the model data comes from
 
 For a repo id, Headroom makes three requests straight from your browser. The Hub sends CORS headers, so no proxy is needed.
@@ -139,7 +146,7 @@ Gated repos such as Llama and Gemma return 401 without a token. You have two opt
 
 Presets are plain data in [`src/lib/presets/`](src/lib/presets/):
 
-- **GPU:** add an entry to `GPU_PRESETS` in `gpus.ts` with its `name`, `vendor` (`nvidia-consumer`, `nvidia-datacenter`, `amd`, `apple` or `other`), per-GPU `vramGB` in decimal GB, `bandwidthGBs`, and `tflopsBf16` (dense, no-sparsity BF16 tensor TFLOPS from the vendor spec sheet; used for the TTFT estimate). It appears in the GPU select under its vendor group, with all three fields editable once selected.
+- **GPU:** add an entry to `GPU_PRESETS` in `gpus.ts` with its `name`, `vendor` (`nvidia-consumer`, `nvidia-datacenter`, `amd`, `apple` or `other`), per-GPU `vramGB` in decimal GB, `bandwidthGBs`, and `tflopsBf16` (dense, no-sparsity BF16 tensor TFLOPS from the vendor spec sheet; used for the TTFT estimate). It appears in the GPU select under its vendor group, with all three fields editable once selected. For a GPU that's actually rented by the hour (datacenter NVIDIA, AMD MI300X), also add `usdPerHour`: a typical on-demand cloud list price, dated in a comment. Leave it out for consumer/workstation cards, Apple and DGX Spark.
 - **Model:** add a `preset({...})` entry to `MODEL_PRESETS` in `models.ts`. Take the values from the repo's `config.json` and the Hub API's `safetensors.total`. It appears as a quick-pick chip. Add `warnings` for anything a user should know, such as sliding windows, MoE or pre-quantized weights.
 
 Then run `npm test`: `presets.test.ts` checks every preset for sane values.

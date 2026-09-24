@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatBytes, formatBytesBinary, formatNumber, formatTokens } from './format';
+import { formatBytes, formatBytesBinary, formatNumber, formatTokens, formatUsd } from './format';
 
 describe('formatBytes (decimal)', () => {
   it('uses sensible precision', () => {
@@ -38,6 +38,21 @@ describe('formatNumber', () => {
     expect(formatNumber(1234567)).toBe('1,234,567');
     expect(formatNumber(43.912, 1)).toBe('43.9');
     expect(formatNumber(Infinity)).toBe('—');
+  });
+});
+
+describe('formatUsd', () => {
+  it('uses two decimals for ordinary amounts', () => {
+    expect(formatUsd(6.52)).toBe('$6.52');
+    expect(formatUsd(104.32)).toBe('$104.32');
+    expect(formatUsd(0)).toBe('$0.00');
+  });
+  it('uses finer precision below a cent so it does not round to $0.00', () => {
+    expect(formatUsd(0.0042)).toBe('$0.0042');
+  });
+  it('renders non-finite as a dash', () => {
+    expect(formatUsd(NaN)).toBe('—');
+    expect(formatUsd(Infinity)).toBe('—');
   });
 });
 
