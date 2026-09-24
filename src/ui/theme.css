@@ -515,6 +515,10 @@ input[type='range'] {
   min-width: 0;
 }
 
+.verdict .warnings {
+  flex-basis: 100%;
+}
+
 .verdict-fits {
   border-color: var(--ok);
 }

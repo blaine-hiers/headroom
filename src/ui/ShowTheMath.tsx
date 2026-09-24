@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
 import {
   attentionParamsPerLayer,
-  DECODE_EFFICIENCY,
   effectiveSlidingLayers,
   formatNumber,
   KV_QUANTS,
   kvBytesPerTokenPerLayer,
+  TP_PENALTY_PER_DOUBLING,
   WEIGHT_QUANTS,
   weightBytes,
 } from '../lib';
@@ -66,7 +66,11 @@ export function ShowTheMath({ state, result }: Props) {
   const { model, quant, hardware: hw, workload } = state;
   const kvB = KV_QUANTS[quant.kv].bytesPerElement;
   const bits = WEIGHT_QUANTS[quant.weight].bitsPerWeight;
-  const perLayer = kvBytesPerTokenPerLayer(model, quant.kv);
+  const tp = result.tensorParallel;
+  const rawPerLayer = kvBytesPerTokenPerLayer(model, quant.kv);
+  const rawPerToken = rawPerLayer * model.numLayers;
+  // KV-head replication (numKvHeads < gpuCount) scales every layer's KV bytes equally.
+  const perLayer = rawPerLayer * tp.kvReplicationFactor;
   const sliding = effectiveSlidingLayers(model);
   const full = model.numLayers - sliding;
   const C = Math.floor(workload.contextTokens);
@@ -87,13 +91,21 @@ export function ShowTheMath({ state, result }: Props) {
             title="KV per token (MLA)"
             formula="layers × (kv_lora_rank + qk_rope_head_dim) × kvBytes"
             sub={`${n(model.numLayers)} × (${n(model.kvLoraRank ?? 0)} + ${n(model.qkRopeHeadDim ?? 0)}) × ${kvB}`}
-            result={<>{n(result.kvBytesPerToken)} B ({B(result.kvBytesPerToken)})</>}
+            result={<>{n(rawPerToken)} B ({B(rawPerToken)})</>}
           />
         ) : (
           <Step
             title="KV per token"
             formula="2 × layers × kvHeads × headDim × kvBytes"
             sub={`2 × ${n(model.numLayers)} × ${n(model.numKvHeads)} × ${n(model.headDim)} × ${kvB}`}
+            result={<>{n(rawPerToken)} B ({B(rawPerToken)})</>}
+          />
+        )}
+        {tp.kvHeadsReplicated && (
+          <Step
+            title="KV-head replication (tensor parallel)"
+            formula="KV per token × (gpuCount / numKvHeads)"
+            sub={`${n(rawPerToken)} × (${tp.gpuCount} / ${n(model.numKvHeads)})`}
             result={<>{n(result.kvBytesPerToken)} B ({B(result.kvBytesPerToken)})</>}
           />
         )}
@@ -152,17 +164,28 @@ export function ShowTheMath({ state, result }: Props) {
           result={`${n(result.maxContextForUsers)} tokens`}
         />
         <ActiveParamsStep state={state} active={active} method={method} />
+        {hw.gpuCount > 1 && (
+          <Step
+            title="Tensor-parallel communication penalty"
+            formula={`decodeEfficiency × ${TP_PENALTY_PER_DOUBLING}^log2(gpuCount)`}
+            sub={`decodeEfficiency × ${TP_PENALTY_PER_DOUBLING}^log2(${n(hw.gpuCount)})`}
+            result={n(result.throughput.efficiency, 3)}
+          />
+        )}
         <Step
           title="Decode throughput"
           formula="bandwidthGBs × 1e9 × gpuCount × efficiency / (activeWeights + N × KV per request)"
           sub={
             <>
-              {n(hw.bandwidthGBs)} × 1e9 × {n(hw.gpuCount)} × {DECODE_EFFICIENCY} / ({n(activeBytes)} + {n(N)} × {n(result.kvBytesPerRequest)})
+              {n(hw.bandwidthGBs)} × 1e9 × {n(hw.gpuCount)} × {n(result.throughput.efficiency, 3)} / ({n(activeBytes)} + {n(N)} × {n(result.kvBytesPerRequest)})
             </>
           }
           result={`${n(result.throughput.perUserTokS, 1)} tok/s per user, ${n(result.throughput.aggregateTokS, 1)} tok/s aggregate`}
         />
       </ol>
+      {hw.gpuCount > 1 && (
+        <p className="help">Multi-GPU numbers assume tensor-parallel bandwidth pooling and ignore all-reduce communication cost beyond this penalty.</p>
+      )}
     </details>
   );
 }

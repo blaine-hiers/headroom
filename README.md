@@ -94,9 +94,13 @@ All sizes are in bytes.
 - `maxUsers(C) = floor((usable − fixed) / kvPerRequest(C))`, or 0 if that is negative
 - `maxContext(N) = min(maxPositionEmbeddings, floor((usable − fixed) / (N × bytesPerTokenFullAttention)))`. This uses the full-attention rate, so it is conservative: sliding layers only lower it.
 
+**Multi-GPU (tensor parallel)**. With more than one GPU, Headroom assumes tensor parallelism (VRAM and bandwidth add across GPUs). vLLM and most runtimes refuse to start when the head count can't be split evenly, so Headroom checks it and warns next to the fit badge:
+- `numAttentionHeads % gpuCount === 0` (from the config's `num_attention_heads`, when known). If not, the nearest GPU counts that do divide evenly are suggested. Models without that field (no structural `ffn` spec) skip the check rather than warn falsely.
+- `numKvHeads < gpuCount` forces KV-head replication (some GPUs hold a duplicate KV head to keep the split even). Headroom models this: `kvReplicationFactor = gpuCount / numKvHeads` multiplies the KV total (KV per token, per request, and the context table), and a warning explains the resulting per-GPU size increase.
+
 **Decode throughput** (an estimate: decode is limited by memory bandwidth)
 - `bytesPerStep(N) = activeWeightBytes + N × kvPerRequest(C)`
-- `stepsPerSec = bandwidthGBs × 1e9 × gpuCount × 0.7 / bytesPerStep(N)`. With more than one GPU this assumes tensor parallelism, so bandwidth adds up.
+- `stepsPerSec = bandwidthGBs × 1e9 × gpuCount × efficiency / bytesPerStep(N)`. With more than one GPU this assumes tensor parallelism, so bandwidth adds up — but real tensor-parallel communication (all-reduce between GPUs each step) is not otherwise modeled, so `efficiency` carries a small labelled scaling penalty for it: `efficiency = 0.7 × 0.9^log2(gpuCount)`, i.e. ×0.9 for each doubling of GPU count (1 at a single GPU, so single-GPU numbers are unchanged).
 - per-user tok/s = `stepsPerSec`; aggregate tok/s = `stepsPerSec × N`
 - Prefill (time to first token) is compute-bound and is not estimated.
 

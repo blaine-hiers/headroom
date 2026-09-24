@@ -61,6 +61,31 @@ export interface ModelSpec {
   warnings: string[];
 }
 
+/**
+ * Multi-GPU inference shards the model across GPUs with tensor parallelism.
+ * vLLM (and most runtimes) refuse to start when numAttentionHeads isn't evenly
+ * divisible by the GPU count, and when there are fewer KV heads than GPUs the
+ * KV heads get replicated onto more than one GPU, raising the KV memory total.
+ */
+export interface TensorParallelCheck {
+  /** gpuCount this check was run for. */
+  gpuCount: number;
+  /** Attention head count used for the split check (ffn.numAttentionHeads), when known. */
+  numAttentionHeads?: number;
+  /** True when the head count is unknown (no ffn spec) — the split can't be checked. */
+  checkable: boolean;
+  /** True when gpuCount ≤ 1, headless, or numAttentionHeads % gpuCount === 0. */
+  headsDivisible: boolean;
+  /** Nearest GPU counts that divide numAttentionHeads evenly, ascending. */
+  suggestedGpuCounts: number[];
+  /** True when numKvHeads < gpuCount, so at least one KV head is replicated onto more than one GPU. */
+  kvHeadsReplicated: boolean;
+  /** KV heads actually resident across all GPUs once replication is accounted for (== numKvHeads unless replicated). */
+  effectiveKvHeads: number;
+  /** effectiveKvHeads / numKvHeads. 1 when there is no replication. Multiplies KV bytes. */
+  kvReplicationFactor: number;
+}
+
 export type WeightQuantKey =
   | 'fp32'
   | 'bf16'
@@ -128,4 +153,6 @@ export interface CalcResult {
   /** rows for 2K / 8K / 32K / 128K plus the chosen context if different */
   contextTable: Array<{ contextTokens: number; kvBytesPerRequest: number; maxUsers: number }>;
   throughput: { perUserTokS: number; aggregateTokS: number; efficiency: number };
+  /** Tensor-parallel split check for hardware.gpuCount (see tensorParallel.ts). */
+  tensorParallel: TensorParallelCheck;
 }
