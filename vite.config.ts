@@ -63,17 +63,45 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Cache-first for the app shell, falling back to the network and topping up the cache with
-// whatever it returns. Never touches a cross-origin request (in particular huggingface.co,
-// which must always go straight to the network) or anything outside this app's own scope.
+const INDEX_URL = \`\${BASE}index.html\`;
+
+// Never touches a cross-origin request (in particular huggingface.co, which must always go
+// straight to the network) or anything outside this app's own scope.
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin || !url.pathname.startsWith(BASE)) return;
 
+  // Navigations (a shared link's own URL, bare '/headroom/', a reload, ...) go network-first:
+  // the whole calculator state lives in the query string, so there is no way to precache every
+  // URL a shared link might use. Offline, fall back to the precached shell HTML itself (matched
+  // by its own fixed URL, not the navigation's, so a never-seen '?...' still renders the app,
+  // which then reads the query string once it boots).
+  if (req.mode === 'navigate') {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(INDEX_URL, copy));
+          }
+          return res;
+        })
+        .catch(() => caches.match(INDEX_URL, { ignoreVary: true }).then((cached) => cached ?? Response.error())),
+    );
+    return;
+  }
+
+  // Everything else (the built JS/CSS/icons): cache-first, topping up the cache with whatever
+  // the network returns. ignoreVary: true because some static hosts (vite preview among them)
+  // send 'Vary: Origin' on every response, and the browser's own Origin header on a live
+  // same-origin 'cors' request (e.g. a module <script>) doesn't reliably match the header the
+  // cache recorded for the identical URL when it was precached from inside the service worker —
+  // a real Chromium quirk, not a hypothetical. We deliberately don't need content negotiation
+  // for our own build output: each URL is one immutable, content-hashed file.
   event.respondWith(
-    caches.match(req).then((cached) => {
+    caches.match(req, { ignoreVary: true }).then((cached) => {
       if (cached) return cached;
       return fetch(req)
         .then((res) => {
@@ -83,7 +111,7 @@ self.addEventListener('fetch', (event) => {
           }
           return res;
         })
-        .catch(() => cached);
+        .catch(() => cached ?? Response.error());
     }),
   );
 });

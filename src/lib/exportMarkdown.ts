@@ -23,9 +23,18 @@ function verdict(state: CalcState, result: CalcResult): { label: string; detail:
   return { label: tight ? 'Tight' : 'Fits', detail: `${formatBytes(result.headroomBytes)} headroom` };
 }
 
+/**
+ * Escapes a value for use inside a Markdown table cell: an unescaped `|` splits the row into
+ * extra columns, and a raw newline breaks the table entirely. `fileWeights.label` in particular
+ * comes straight from a repo's filename, so it can contain either.
+ */
+function mdCell(value: string): string {
+  return value.replace(/\|/g, '\\|').replace(/\r\n|\r|\n/g, ' ');
+}
+
 function weightsLine(state: CalcState, result: CalcResult): string {
   if (result.weightSource === 'files' && state.model.fileWeights) {
-    return `${formatBytes(result.weightBytes)} (${state.model.fileWeights.label}, from repo files)`;
+    return `${formatBytes(result.weightBytes)} (${mdCell(state.model.fileWeights.label)}, from repo files)`;
   }
   return `${formatBytes(result.weightBytes)} (${WEIGHT_QUANTS[state.quant.weight].label}, estimated)`;
 }

@@ -101,4 +101,28 @@ describe('buildMarkdownSummary', () => {
     const md = buildMarkdownSummary(s, calculate(s), LINK);
     expect(md).toContain('Q4_K_M GGUF, from repo files');
   });
+
+  it('escapes a "|" in a file-weights label so it cannot split the table into extra columns', () => {
+    const s = state({
+      model: makeSpec({ fileWeights: { bytes: 4e10, label: 'weird|file|name.gguf', quant: 'q4_k_m' } }),
+      quant: { weight: 'q4_k_m', kv: 'fp16' },
+    });
+    const md = buildMarkdownSummary(s, calculate(s), LINK);
+    const weightsRow = md.split('\n').find((l) => l.startsWith('| Weights |'));
+    expect(weightsRow).toBeDefined();
+    // Exactly the table's own two separators ("| Weights |" and the trailing "|") should remain
+    // unescaped; every "|" that came from the label must be escaped.
+    expect(weightsRow).toContain('weird\\|file\\|name.gguf');
+    expect(weightsRow!.match(/(?<!\\)\|/g)).toHaveLength(3);
+  });
+
+  it('strips a newline out of a file-weights label so it cannot break the table', () => {
+    const s = state({
+      model: makeSpec({ fileWeights: { bytes: 4e10, label: 'multi\nline label', quant: 'q4_k_m' } }),
+      quant: { weight: 'q4_k_m', kv: 'fp16' },
+    });
+    const md = buildMarkdownSummary(s, calculate(s), LINK);
+    expect(md).toContain('multi line label');
+    expect(md).not.toContain('multi\nline label');
+  });
 });
