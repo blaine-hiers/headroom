@@ -17,7 +17,7 @@ import { HardwareFinder } from './HardwareFinder';
 import { HardwarePanel } from './HardwarePanel';
 import { Header } from './Header';
 import { ModelPanel } from './ModelPanel';
-import { plannerReducer } from './planner/plannerState';
+import { decodeHardwareSizingState, encodeHardwareSizingParams, initialPlannerState, plannerReducer } from './planner/plannerState';
 import type { PlannerState } from './planner/plannerState';
 import { Planner } from './Planner';
 import { QuantPanel } from './QuantPanel';
@@ -34,6 +34,7 @@ function urlFor(columns: readonly CalcState[], tab: TabKey, planner: PlannerStat
   const params = new URLSearchParams(encodeCompareState(columns));
   setTabParam(params, tab);
   encodeTaskPickerState(params, planner.taskPicker);
+  encodeHardwareSizingParams(params, planner.hardwareSizing);
   return `${window.location.pathname}?${params.toString()}`;
 }
 
@@ -61,7 +62,9 @@ export default function App() {
   // or resets this, so Calculator -> Planner -> Calculator round-trips both untouched.
   const [planner, plannerDispatch] = useReducer(plannerReducer, undefined, () => {
     const taskPicker = decodeTaskPickerState(window.location.search);
-    return taskPicker ? { taskPicker } : {};
+    // hardwareSizing (#25) decodes to undefined for every link written before step 2 existed.
+    const hardwareSizing = decodeHardwareSizingState(window.location.search);
+    return { ...initialPlannerState, ...(taskPicker ? { taskPicker } : {}), ...(hardwareSizing ? { hardwareSizing } : {}) };
   });
 
   // Undo state: store previous calculator state + compare mode state
@@ -309,6 +312,7 @@ export default function App() {
           onClear={clearPlanner}
           showUndo={showUndo && undoTab === 'planner'}
           onUndo={undoPlannerClear}
+          calculatorModel={state.model}
         />
       </div>
       <footer className="footer muted">

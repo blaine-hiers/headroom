@@ -1,4 +1,5 @@
 import type { Dispatch } from 'react';
+import type { ModelSpec } from '../lib';
 import type { OpenInCalculatorPatch } from './state';
 import { HardwareSizing } from './planner/HardwareSizing';
 import type { PlannerAction, PlannerState } from './planner/plannerState';
@@ -12,6 +13,8 @@ interface Props {
   onClear?: () => void;
   showUndo?: boolean;
   onUndo?: () => void;
+  /** The Calculator's current primary-column model, for HardwareSizing's "use the Calculator's model" option (#25). */
+  calculatorModel?: ModelSpec;
 }
 
 /**
@@ -20,7 +23,7 @@ interface Props {
  * without touching this file or each other. `.planner-toolbar` is the obvious slot #26's Clear
  * button goes in.
  */
-export function Planner({ planner, dispatch, openInCalculator, onClear, showUndo, onUndo }: Props) {
+export function Planner({ planner, dispatch, openInCalculator, onClear, showUndo, onUndo, calculatorModel }: Props) {
   return (
     <div className="planner">
       {showUndo && onUndo && (
@@ -37,7 +40,7 @@ export function Planner({ planner, dispatch, openInCalculator, onClear, showUndo
         </button>
       </div>
       <TaskPicker planner={planner} dispatch={dispatch} openInCalculator={openInCalculator} />
-      <HardwareSizing planner={planner} dispatch={dispatch} openInCalculator={openInCalculator} />
+      <HardwareSizing planner={planner} dispatch={dispatch} openInCalculator={openInCalculator} calculatorModel={calculatorModel} />
     </div>
   );
 }
