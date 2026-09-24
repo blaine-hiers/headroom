@@ -176,3 +176,40 @@ describe('clampState', () => {
     expect(clamped.model.params).toBe(0);
   });
 });
+
+// #21: the Planner's "use this" actions hand a partial config to the Calculator via
+// App.tsx's openInCalculator, which dispatches this action. This is that action's reducer path.
+describe('reducer: loadPartial (openInCalculator handoff)', () => {
+  const llama8b = preset('Llama 3.1 8B');
+
+  it('replaces every slice named in the patch', () => {
+    const patch = {
+      model: llama8b,
+      quant: { weight: 'q4_k_m', kv: 'fp8' } as const,
+      hardware: { gpuName: 'H100 SXM', gpuCount: 2, vramGB: 80, bandwidthGBs: 3350, tflopsBf16: 989.5, reservePct: 5, overheadGB: 1 },
+      workload: { contextTokens: 4096, concurrentUsers: 8 },
+      runtime: 'vllm' as const,
+    };
+    const s = reducer(defaultState, { type: 'loadPartial', patch });
+    expect(s.model.id).toBe(llama8b.id);
+    expect(s.quant).toEqual(patch.quant);
+    expect(s.hardware).toMatchObject(patch.hardware);
+    expect(s.workload).toEqual(patch.workload);
+    expect(s.runtime).toBe('vllm');
+  });
+
+  it('leaves every slice the patch omits exactly as it was', () => {
+    const s = reducer(defaultState, { type: 'loadPartial', patch: { runtime: 'vllm' } });
+    expect(s.model).toBe(defaultState.model);
+    expect(s.quant).toBe(defaultState.quant);
+    expect(s.hardware).toBe(defaultState.hardware);
+    expect(s.workload).toBe(defaultState.workload);
+    expect(s.runtime).toBe('vllm');
+  });
+
+  it('a model patch still runs loadModel\'s own logic (quant follows the new model\'s native dtype)', () => {
+    const s = reducer(defaultState, { type: 'loadPartial', patch: { model: llama8b } });
+    expect(s.model.id).toBe(llama8b.id);
+    expect(s.quant.weight).not.toBeUndefined();
+  });
+});

@@ -53,6 +53,13 @@ export function maxContextFor(model: ModelSpec): number {
   return Math.max(MIN_CONTEXT, Math.floor(model.maxPositionEmbeddings) || MIN_CONTEXT);
 }
 
+/**
+ * A config another tab (currently just the Planner, #24/#25) can hand to the Calculator via
+ * `openInCalculator` in App.tsx. Each field replaces that whole slice of state, same as loading
+ * a model or applying a hardware-finder result does today — it is not a deep-merge patch.
+ */
+export type OpenInCalculatorPatch = Partial<Pick<CalcState, 'model' | 'quant' | 'hardware' | 'workload' | 'runtime'>>;
+
 export type Action =
   | { type: 'loadModel'; spec: ModelSpec }
   | { type: 'editModel'; patch: Partial<ModelSpec> }
@@ -60,7 +67,8 @@ export type Action =
   | { type: 'hardware'; patch: Partial<HardwareSpec> }
   | { type: 'workload'; patch: Partial<Workload> }
   | { type: 'runtime'; runtime: RuntimeKey }
-  | { type: 'speculative'; patch: Partial<SpeculativeConfig> };
+  | { type: 'speculative'; patch: Partial<SpeculativeConfig> }
+  | { type: 'loadPartial'; patch: OpenInCalculatorPatch };
 
 function clampWorkload(w: Workload, model: ModelSpec): Workload {
   return {
@@ -122,6 +130,16 @@ export function reducer(state: CalcState, action: Action): CalcState {
       if ('draftModel' in action.patch && action.patch.draftModel === undefined) delete merged.draftModel;
       if ('draftParams' in action.patch && action.patch.draftParams === undefined) delete merged.draftParams;
       return { ...state, speculative: merged };
+    }
+    case 'loadPartial': {
+      const { patch } = action;
+      let next = state;
+      if (patch.model !== undefined) next = reducer(next, { type: 'loadModel', spec: patch.model });
+      if (patch.quant !== undefined) next = { ...next, quant: { ...next.quant, ...patch.quant } };
+      if (patch.hardware !== undefined) next = reducer(next, { type: 'hardware', patch: patch.hardware });
+      if (patch.workload !== undefined) next = reducer(next, { type: 'workload', patch: patch.workload });
+      if (patch.runtime !== undefined) next = { ...next, runtime: patch.runtime };
+      return next;
     }
   }
 }

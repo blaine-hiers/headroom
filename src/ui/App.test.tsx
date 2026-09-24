@@ -1,4 +1,4 @@
-import { act, render, screen, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { encodeState } from '../lib';
@@ -483,5 +483,81 @@ describe('App', () => {
       expect(screen.getByLabelText('Hugging Face token')).toHaveValue('');
       getItem.mockRestore();
     });
+  });
+});
+
+describe('Tabs (#21)', () => {
+  it('opens on the Calculator by default, with the tab bar\'s ARIA wired up', () => {
+    render(<App />);
+    const calcTab = screen.getByRole('tab', { name: 'Calculator' });
+    const plannerTab = screen.getByRole('tab', { name: 'Planner' });
+    expect(calcTab).toHaveAttribute('aria-selected', 'true');
+    expect(plannerTab).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', calcTab.id);
+    expect(screen.getByRole('heading', { level: 1, name: 'Headroom' })).toBeInTheDocument();
+  });
+
+  it('clicking the Planner tab switches panels and updates the URL', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('tab', { name: 'Planner' }));
+    expect(screen.getByRole('tab', { name: 'Planner' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Which model for this task?')).toBeInTheDocument();
+    expect(screen.getByText('What hardware to serve N users?')).toBeInTheDocument();
+    await waitFor(() => expect(window.location.search).toContain('tab=planner'));
+
+    await user.click(screen.getByRole('tab', { name: 'Calculator' }));
+    expect(screen.getByRole('tab', { name: 'Calculator' })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(window.location.search).not.toContain('tab='));
+  });
+
+  it('arrow keys move focus and selection between tabs; Home/End jump to the ends', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const calcTab = screen.getByRole('tab', { name: 'Calculator' });
+    const plannerTab = screen.getByRole('tab', { name: 'Planner' });
+    calcTab.focus();
+
+    await user.keyboard('{ArrowRight}');
+    expect(plannerTab).toHaveFocus();
+    expect(plannerTab).toHaveAttribute('aria-selected', 'true');
+
+    await user.keyboard('{ArrowLeft}');
+    expect(calcTab).toHaveFocus();
+    expect(calcTab).toHaveAttribute('aria-selected', 'true');
+
+    await user.keyboard('{End}');
+    expect(plannerTab).toHaveFocus();
+    await user.keyboard('{Home}');
+    expect(calcTab).toHaveFocus();
+  });
+
+  it('?tab=planner opens directly on the Planner', () => {
+    window.history.replaceState(null, '', '/?tab=planner');
+    render(<App />);
+    expect(screen.getByRole('tab', { name: 'Planner' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Which model for this task?')).toBeInTheDocument();
+  });
+
+  it('an old link with no tab key opens the Calculator unchanged', () => {
+    const s = { ...defaultState, workload: { contextTokens: 32768, concurrentUsers: 4 } };
+    window.history.replaceState(null, '', `/?${encodeState(s)}`);
+    render(<App />);
+    expect(screen.getByRole('tab', { name: 'Calculator' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByLabelText('Concurrent users')).toHaveValue(4);
+  });
+
+  it('Calculator state survives a round trip through the Planner', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const ctx = screen.getByLabelText('Context tokens', { exact: true });
+    await user.clear(ctx);
+    await user.type(ctx, '32768');
+    await user.tab();
+    expect(ctx).toHaveValue(32768);
+
+    await user.click(screen.getByRole('tab', { name: 'Planner' }));
+    await user.click(screen.getByRole('tab', { name: 'Calculator' }));
+    expect(screen.getByLabelText('Context tokens', { exact: true })).toHaveValue(32768);
   });
 });
