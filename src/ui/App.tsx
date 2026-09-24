@@ -1,12 +1,24 @@
 import { useCallback, useEffect, useMemo, useReducer, useState } from 'react';
-import { calculate, cloneState, decodeCompareColumns, decodeTab, DISABLED_SPECULATIVE, encodeCompareState, MAX_COMPARE_COLUMNS, setTabParam } from '../lib';
+import {
+  calculate,
+  cloneState,
+  decodeCompareColumns,
+  decodeTab,
+  decodeTaskPickerState,
+  DISABLED_SPECULATIVE,
+  encodeCompareState,
+  encodeTaskPickerState,
+  MAX_COMPARE_COLUMNS,
+  setTabParam,
+} from '../lib';
 import type { CalcState, TabKey, WeightQuantKey } from '../lib';
 import { CompareTable } from './CompareTable';
 import { HardwareFinder } from './HardwareFinder';
 import { HardwarePanel } from './HardwarePanel';
 import { Header } from './Header';
 import { ModelPanel } from './ModelPanel';
-import { initialPlannerState, plannerReducer } from './planner/plannerState';
+import { plannerReducer } from './planner/plannerState';
+import type { PlannerState } from './planner/plannerState';
 import { Planner } from './Planner';
 import { QuantPanel } from './QuantPanel';
 import { Results } from './Results';
@@ -18,15 +30,16 @@ import { WorkloadPanel } from './WorkloadPanel';
 
 const URL_DEBOUNCE_MS = 250;
 
-function urlFor(columns: readonly CalcState[], tab: TabKey): string {
+function urlFor(columns: readonly CalcState[], tab: TabKey, planner: PlannerState): string {
   const params = new URLSearchParams(encodeCompareState(columns));
   setTabParam(params, tab);
+  encodeTaskPickerState(params, planner.taskPicker);
   return `${window.location.pathname}?${params.toString()}`;
 }
 
-function writeUrl(columns: readonly CalcState[], tab: TabKey): void {
+function writeUrl(columns: readonly CalcState[], tab: TabKey, planner: PlannerState): void {
   try {
-    window.history.replaceState(null, '', urlFor(columns, tab));
+    window.history.replaceState(null, '', urlFor(columns, tab, planner));
   } catch {
     // history can throw in sandboxed frames; the link just will not update
   }
@@ -46,7 +59,10 @@ export default function App() {
   const [tab, setTab] = useState<TabKey>(() => decodeTab(window.location.search));
   // Its own reducer, deliberately separate from the Calculator's: switching tabs never touches
   // or resets this, so Calculator -> Planner -> Calculator round-trips both untouched.
-  const [planner, plannerDispatch] = useReducer(plannerReducer, initialPlannerState);
+  const [planner, plannerDispatch] = useReducer(plannerReducer, undefined, () => {
+    const taskPicker = decodeTaskPickerState(window.location.search);
+    return taskPicker ? { taskPicker } : {};
+  });
 
   const columns = useMemo(() => [state, ...extraColumns], [state, extraColumns]);
   const activeState = columns[selected] ?? state;
@@ -65,14 +81,14 @@ export default function App() {
   const activeResult = results[selected] ?? results[0];
 
   useEffect(() => {
-    const t = window.setTimeout(() => writeUrl(columns, tab), URL_DEBOUNCE_MS);
+    const t = window.setTimeout(() => writeUrl(columns, tab, planner), URL_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
-  }, [columns, tab]);
+  }, [columns, tab, planner]);
 
   const getLink = useCallback(() => {
-    writeUrl(columns, tab);
-    return `${window.location.origin}${urlFor(columns, tab)}`;
-  }, [columns, tab]);
+    writeUrl(columns, tab, planner);
+    return `${window.location.origin}${urlFor(columns, tab, planner)}`;
+  }, [columns, tab, planner]);
 
   /** Lets another tab (the Planner's "use this" actions) load a config into the Calculator's
    *  primary column and switch to it. Always targets the primary column, never whatever compare
