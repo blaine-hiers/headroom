@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CUSTOM_GPU_NAME, encodeState, findGpuPreset, findModelPreset } from '../lib';
 import type { CalcState } from '../lib';
 import { calculate } from '../lib';
-import { clampModel, defaultState, initialState, MAX_DIM, MAX_FILE_BYTES, reducer } from './state';
+import { clampModel, clampState, defaultState, initialState, MAX_DIM, MAX_FILE_BYTES, MAX_GPUS, reducer } from './state';
 
 function preset(name: string) {
   const m = findModelPreset(name);
@@ -144,5 +144,35 @@ describe('initialState from a URL', () => {
   it('a known GPU name is kept', () => {
     const s = initialState(`?${encodeState(defaultState)}`);
     expect(s.hardware.gpuName).toBe(defaultState.hardware.gpuName);
+  });
+});
+
+// clampState is initialState's clamping half, factored out so compare mode's extra columns
+// (decoded from a c2/c3 URL param, not just the primary "?" state) get the same treatment —
+// see headroom#8. decodeState only checks shape/types, not range, so an untrusted decoded
+// CalcState must go through clampState before it ever reaches calculate().
+describe('clampState', () => {
+  it('clamps out-of-range hardware fields exactly like initialState does for the primary column', () => {
+    const crafted: CalcState = {
+      ...defaultState,
+      hardware: { ...defaultState.hardware, gpuCount: 999_999, vramGB: -50, bandwidthGBs: -10, tflopsBf16: -5, reservePct: -20, overheadGB: 999 },
+    };
+    const clamped = clampState(crafted);
+    expect(clamped.hardware.gpuCount).toBe(MAX_GPUS);
+    expect(clamped.hardware.vramGB).toBe(0.1);
+    expect(clamped.hardware.bandwidthGBs).toBe(1);
+    expect(clamped.hardware.tflopsBf16).toBe(0.1);
+    expect(clamped.hardware.reservePct).toBe(0);
+    expect(clamped.hardware.overheadGB).toBe(8);
+    // Matches what initialState produces for the same (encoded then decoded) state. A default,
+    // disabled offload spec is omitted from the URL, so compare the fields the URL carries.
+    expect(clamped.hardware).toMatchObject(initialState(`?${encodeState(crafted)}`).hardware);
+  });
+
+  it('also clamps the model and workload, matching initialState', () => {
+    const crafted: CalcState = { ...defaultState, model: { ...defaultState.model, numLayers: 5000, params: -5 } };
+    const clamped = clampState(crafted);
+    expect(clamped.model.numLayers).toBe(1000);
+    expect(clamped.model.params).toBe(0);
   });
 });

@@ -2,6 +2,7 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { encodeState } from '../lib';
+import type { CalcState } from '../lib';
 import qwenApi from '../lib/__fixtures__/qwen2.5-7b-instruct.api.json';
 import qwenConfig from '../lib/__fixtures__/qwen2.5-7b-instruct.json';
 import { fromBase64 } from '../lib/__fixtures__/base64';
@@ -314,5 +315,70 @@ describe('App', () => {
 
     expect(screen.getByLabelText('Weights')).toHaveValue('fp8');
     expect(screen.getByLabelText('Context tokens')).toHaveValue(2048);
+  });
+
+  it('compare mode: duplicating the config then editing the new column updates the compare table', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Turning Compare on starts from column B: a duplicate of the current (only) config.
+    await user.click(screen.getByRole('button', { name: 'Compare' }));
+    expect(screen.getByRole('button', { name: 'A' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'B' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'C' })).not.toBeInTheDocument();
+
+    // Freshly duplicated: A and B are identical, so nothing in the row is "better" yet.
+    let totalRow = screen.getByRole('row', { name: /^Total VRAM/ });
+    let cells = within(totalRow).getAllByRole('cell');
+    expect(cells).toHaveLength(2);
+    expect(cells[0]).toHaveTextContent(cells[1].textContent ?? '');
+    expect(cells[0]).not.toHaveClass('compare-best');
+    expect(cells[1]).not.toHaveClass('compare-best');
+
+    // Select column B, so the edit below lands on B, not A.
+    await user.click(screen.getByRole('button', { name: 'B' }));
+    const usersField = screen.getByLabelText('Concurrent users');
+    await user.clear(usersField);
+    await user.type(usersField, '32');
+    await user.tab();
+
+    totalRow = screen.getByRole('row', { name: /^Total VRAM/ });
+    cells = within(totalRow).getAllByRole('cell');
+    expect(cells[0]).not.toHaveTextContent(cells[1].textContent ?? '');
+    // B now uses more VRAM for the same hardware, so A (lower) is the highlighted, better column.
+    expect(cells[0]).toHaveClass('compare-best');
+    expect(cells[1]).not.toHaveClass('compare-best');
+
+    // Switching back to A edits A, not B, and leaves B's column untouched.
+    await user.click(screen.getByRole('button', { name: 'A' }));
+    expect(screen.getByLabelText('Concurrent users')).toHaveValue(1);
+  });
+
+  it('compare mode round-trips a 2-column URL and turning it off drops the extra column from the URL', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'Compare' })); // auto-duplicates into a 2-column state
+    await vi.waitFor(() => expect(window.location.search).toMatch(/[?&]c2=/));
+
+    await user.click(screen.getByRole('button', { name: 'Compare: on' }));
+    await vi.waitFor(() => expect(window.location.search).not.toMatch(/[?&]c2=/));
+  });
+
+  it('compare mode: a crafted out-of-range c2 in the URL is clamped like the primary column', async () => {
+    const bad: CalcState = {
+      ...defaultState,
+      hardware: { ...defaultState.hardware, gpuCount: 999_999, vramGB: -50, bandwidthGBs: -10, tflopsBf16: -5, reservePct: -20, overheadGB: 999 },
+    };
+    const search = `?${encodeState(defaultState)}&c2=${encodeURIComponent(encodeState(bad))}`;
+    window.history.replaceState(null, '', `/${search}`);
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    // A c2 column in the URL turns compare mode on by itself.
+    await user.click(screen.getByRole('button', { name: 'B' }));
+    // Same bounds initialState enforces on the primary column (MAX_GPUS = 16, vramGB >= 0.1).
+    expect(screen.getByLabelText('GPU count')).toHaveValue(16);
+    expect(screen.getByLabelText('VRAM per GPU')).toHaveValue(0.1);
   });
 });

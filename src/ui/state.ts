@@ -176,9 +176,12 @@ export function clampModel(m: ModelSpec): ModelSpec {
   return out;
 }
 
-/** Initial state from the URL; anything unparseable falls back to the defaults. */
-export function initialState(search: string): CalcState {
-  const s = decodeState(search, defaultState);
+/**
+ * Clamps every field of a CalcState into the ranges the UI allows. Used on any state that
+ * came from outside the reducer (a decoded URL, primary or a compare-mode extra column) and so
+ * cannot be trusted to already be in range.
+ */
+export function clampState(s: CalcState): CalcState {
   const hw = s.hardware;
   const model = clampModel(s.model);
   model.warnings = refreshWarnings(model);
@@ -210,6 +213,11 @@ export function initialState(search: string): CalcState {
       ? { ...s.speculative, k: Math.round(clamp(s.speculative.k, 0, MAX_DRAFT_K)), alpha: clamp(s.speculative.alpha, 0, 1) }
       : undefined,
   };
+}
+
+/** Initial state from the URL; anything unparseable falls back to the defaults. */
+export function initialState(search: string): CalcState {
+  return clampState(decodeState(search, defaultState));
 }
 
 export type FitLevel = 'fits' | 'tight' | 'nofit' | 'offloaded';
