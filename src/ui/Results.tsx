@@ -28,13 +28,18 @@ const tokS = (v: number) => (v > 0 && Number.isFinite(v) ? formatNumber(v, v < 1
 const listWithOr = (nums: number[]) =>
   nums.length <= 1 ? (nums[0]?.toString() ?? '') : `${nums.slice(0, -1).join(', ')} or ${nums[nums.length - 1]}`;
 
-function tensorParallelWarnings(tp: CalcResult['tensorParallel']): string[] {
+function tensorParallelWarnings(tp: CalcResult['tensorParallel'], numKvHeads: number): string[] {
   const msgs: string[] = [];
+  // Shared across both messages: suggestions already satisfy the head-count AND KV-head checks.
+  const suggestion = tp.suggestedGpuCounts.length > 0 ? `; use ${listWithOr(tp.suggestedGpuCounts)}` : '';
   if (tp.checkable && !tp.headsDivisible) {
-    const suggestion = tp.suggestedGpuCounts.length > 0 ? `; use ${listWithOr(tp.suggestedGpuCounts)}` : '';
     msgs.push(`${tp.gpuCount} GPUs can't evenly split ${formatNumber(tp.numAttentionHeads ?? 0)} attention heads for tensor parallelism${suggestion}`);
   }
-  if (tp.kvHeadsReplicated) {
+  if (tp.kvHeadsReplicated && !tp.kvHeadsSplitValid) {
+    msgs.push(`${tp.gpuCount} GPUs can't evenly split or replicate ${formatNumber(numKvHeads)} KV heads for tensor parallelism${suggestion}`);
+  } else if (tp.kvHeadsReplicated) {
+    // Not MLA (kvHeadsReplicated is always false there): fewer KV heads than GPUs still lays
+    // out evenly, but every GPU holding a full replicated head raises the per-GPU KV size.
     msgs.push(`Fewer KV heads than GPUs: KV heads are replicated, raising per-GPU KV size ×${formatNumber(tp.kvReplicationFactor, 2)}.`);
   }
   return msgs;
@@ -46,7 +51,7 @@ export function Results({ state, result }: Props) {
   const C = workload.contextTokens;
   const level = fitLevel(result.fits, result.headroomBytes, result.usableBytes);
   const fixedTooBig = result.weightBytes + result.overheadBytes > result.usableBytes;
-  const tpWarnings = tensorParallelWarnings(result.tensorParallel);
+  const tpWarnings = tensorParallelWarnings(result.tensorParallel, model.numKvHeads);
 
   return (
     <div className="results">

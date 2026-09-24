@@ -152,10 +152,11 @@ describe('calculate', () => {
   });
 
   it('tensor-parallel: no ffn spec skips the head check without a false warning', () => {
-    const model = makeSpec(); // no ffn
+    const model = makeSpec({ numKvHeads: 1 }); // no ffn; numKvHeads=1 splits/replicates evenly at any gpuCount
     const r = calculate(state({ model, hardware: { ...h100x4, gpuCount: 3 } }));
     expect(r.tensorParallel.checkable).toBe(false);
     expect(r.tensorParallel.headsDivisible).toBe(true);
+    expect(r.tensorParallel.suggestedGpuCounts).toEqual([]);
   });
 
   it('tensor-parallel: fewer KV heads than GPUs replicates KV and scales the KV total', () => {
@@ -168,6 +169,16 @@ describe('calculate', () => {
     expect(r1.tensorParallel.kvHeadsReplicated).toBe(false);
     expect(r4.kvBytesPerToken).toBe(r1.kvBytesPerToken * 2);
     expect(r4.kvBytesPerRequest).toBe(r1.kvBytesPerRequest * 2);
+  });
+
+  it('tensor-parallel: MLA models are never KV-head-replicated, even with a small numKvHeads', () => {
+    const model = makeSpec({ attention: 'mla', numKvHeads: 2, kvLoraRank: 512, qkRopeHeadDim: 64 });
+    const r4 = calculate(state({ model, hardware: { ...h100x4, gpuCount: 4 } }));
+    expect(r4.tensorParallel.kvHeadsReplicated).toBe(false);
+    expect(r4.tensorParallel.kvHeadsSplitValid).toBe(true);
+    expect(r4.tensorParallel.kvReplicationFactor).toBe(1);
+    const r1 = calculate(state({ model, hardware: { ...h100x4, gpuCount: 1 } }));
+    expect(r4.kvBytesPerToken).toBe(r1.kvBytesPerToken);
   });
 
   it('MoE throughput reads only active weights', () => {

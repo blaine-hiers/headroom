@@ -103,7 +103,7 @@ export function ShowTheMath({ state, result }: Props) {
         )}
         {tp.kvHeadsReplicated && (
           <Step
-            title="KV-head replication (tensor parallel)"
+            title={tp.kvHeadsSplitValid ? 'KV-head replication (tensor parallel)' : 'KV-head replication (uneven split — worst case)'}
             formula="KV per token × (gpuCount / numKvHeads)"
             sub={`${n(rawPerToken)} × (${tp.gpuCount} / ${n(model.numKvHeads)})`}
             result={<>{n(result.kvBytesPerToken)} B ({B(result.kvBytesPerToken)})</>}

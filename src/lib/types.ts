@@ -66,6 +66,8 @@ export interface ModelSpec {
  * vLLM (and most runtimes) refuse to start when numAttentionHeads isn't evenly
  * divisible by the GPU count, and when there are fewer KV heads than GPUs the
  * KV heads get replicated onto more than one GPU, raising the KV memory total.
+ * None of the KV-head fields apply to MLA models: MLA caches one compressed
+ * latent per token with no per-head KV projections to shard or replicate.
  */
 export interface TensorParallelCheck {
   /** gpuCount this check was run for. */
@@ -76,13 +78,23 @@ export interface TensorParallelCheck {
   checkable: boolean;
   /** True when gpuCount ≤ 1, headless, or numAttentionHeads % gpuCount === 0. */
   headsDivisible: boolean;
-  /** Nearest GPU counts that divide numAttentionHeads evenly, ascending. */
+  /** Nearest GPU counts that satisfy both headsDivisible and kvHeadsSplitValid, ascending. */
   suggestedGpuCounts: number[];
-  /** True when numKvHeads < gpuCount, so at least one KV head is replicated onto more than one GPU. */
+  /** True when numKvHeads < gpuCount, so at least one KV head is replicated onto more than one GPU. Always false for MLA. */
   kvHeadsReplicated: boolean;
+  /**
+   * True when numKvHeads can be laid out evenly across gpuCount GPUs: numKvHeads % gpuCount === 0
+   * (split) or gpuCount % numKvHeads === 0 (replicate) — e.g. 3 KV heads over 8 GPUs satisfies
+   * neither and is flagged. Always true for MLA, gpuCount ≤ 1, or a missing/zero KV-head count.
+   */
+  kvHeadsSplitValid: boolean;
   /** KV heads actually resident across all GPUs once replication is accounted for (== numKvHeads unless replicated). */
   effectiveKvHeads: number;
-  /** effectiveKvHeads / numKvHeads. 1 when there is no replication. Multiplies KV bytes. */
+  /**
+   * effectiveKvHeads / numKvHeads: the per-GPU KV memory multiplier when each GPU holds at
+   * least one KV head (gpuCount / numKvHeads), reported even when kvHeadsSplitValid is false.
+   * 1 when there is no replication or the model is MLA. Multiplies KV bytes.
+   */
   kvReplicationFactor: number;
 }
 
