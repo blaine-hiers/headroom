@@ -3,7 +3,7 @@ import { activeParamsDetailed, fetchRepo, findModelPreset, formatBytes, MODEL_PR
 import type { Attention, GgufOption, ModelSpec, MoeSpec, NativeDtype } from '../lib';
 import { NumberField } from './NumberField';
 import { RepoSearch } from './RepoSearch';
-import { readStorage, TOKEN_KEY, writeStorage } from './storage';
+import { readStorage, REMEMBER_TOKEN_KEY, TOKEN_KEY, writeStorage } from './storage';
 import { getRecents, addRecent, removeRecent, clearRecents } from './recents';
 
 interface Props {
@@ -25,7 +25,23 @@ const BIG = 1e7;
 export function ModelPanel({ model, onLoad, onEdit }: Props) {
   const inputId = useId();
   const tokenId = useId();
-  const [token, setToken] = useState(() => readStorage(TOKEN_KEY) ?? '');
+  const rememberId = useId();
+  // Resolve remember-vs-token together, once, so an explicit "don't remember" preference
+  // never leaves a stale token (written by another tab, or an older build) loaded into
+  // state or sitting in storage.
+  const [tokenInit] = useState(() => {
+    const pref = readStorage(REMEMBER_TOKEN_KEY);
+    // No preference saved yet: an existing stored token means an existing user, who
+    // should start checked so their saved token keeps working. New users default unchecked.
+    const remember = pref !== null ? pref === 'true' : readStorage(TOKEN_KEY) !== null;
+    if (!remember) {
+      if (pref === 'false') writeStorage(TOKEN_KEY, null);
+      return { token: '', remember };
+    }
+    return { token: readStorage(TOKEN_KEY) ?? '', remember };
+  });
+  const [token, setToken] = useState(tokenInit.token);
+  const [rememberToken, setRememberToken] = useState(tokenInit.remember);
   const [fetchState, setFetchState] = useState<FetchState>({ kind: 'idle' });
   const [recents, setRecents] = useState(() => getRecents());
   const [gguf, setGguf] = useState<{ id: string; options: GgufOption[]; selected: string } | undefined>(undefined);
@@ -183,11 +199,30 @@ export function ModelPanel({ model, onLoad, onEdit }: Props) {
             placeholder="hf_…"
             value={token}
             onChange={(e) => {
-              setToken(e.target.value);
-              writeStorage(TOKEN_KEY, e.target.value.trim());
+              const next = e.target.value;
+              setToken(next);
+              if (rememberToken) writeStorage(TOKEN_KEY, next.trim());
             }}
           />
-          <p className="help">Sent only to huggingface.co as a Bearer token; stored only in this browser.</p>
+          <label className="check">
+            <input
+              id={rememberId}
+              type="checkbox"
+              checked={rememberToken}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setRememberToken(checked);
+                writeStorage(REMEMBER_TOKEN_KEY, checked ? 'true' : 'false');
+                writeStorage(TOKEN_KEY, checked ? token.trim() || null : null);
+              }}
+            />
+            Remember token on this device
+          </label>
+          <p className="help">
+            {rememberToken
+              ? 'Sent only to huggingface.co as a Bearer token; stored only in this browser.'
+              : 'Sent only to huggingface.co as a Bearer token; kept only until you reload.'}
+          </p>
         </div>
       </details>
 

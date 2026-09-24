@@ -74,7 +74,34 @@ describe('model presets', () => {
     expect(findModelPreset('gpt-oss-20b')).toMatchObject({ numLayers: 24, slidingLayers: 12 });
     expect(findModelPreset('DeepSeek-V3.1')).toMatchObject({ attention: 'mla', kvLoraRank: 512, qkRopeHeadDim: 64, nativeDtype: 'fp8', maxPositionEmbeddings: 163840 });
     expect(findModelPreset('Mistral Small 3.2 24B')).toMatchObject({ numLayers: 40, numKvHeads: 8, headDim: 128 });
+    expect(findModelPreset('Llama 3.2 1B')).toMatchObject({ numLayers: 16, numKvHeads: 8, headDim: 64, hiddenSize: 2048 });
+    expect(findModelPreset('Llama 3.2 3B')).toMatchObject({ numLayers: 28, numKvHeads: 8, headDim: 128, hiddenSize: 3072 });
+    expect(findModelPreset('Llama 4 Scout 17B')).toMatchObject({ numLayers: 48, headDim: 128, hiddenSize: 5120, maxPositionEmbeddings: 10_485_760 });
+    expect(findModelPreset('Llama 4 Scout 17B')?.moe).toEqual({ numExperts: 16, expertsPerToken: 1, sharedExperts: 1 });
+    expect(findModelPreset('Gemma 3 4B')).toMatchObject({ numLayers: 34, slidingLayers: 28, slidingWindow: 1024, numKvHeads: 4, headDim: 256 });
+    expect(findModelPreset('Gemma 3 12B')).toMatchObject({ numLayers: 48, slidingLayers: 40, slidingWindow: 1024, numKvHeads: 8, headDim: 256 });
     expect(findModelPreset('nope')).toBeUndefined();
+  });
+
+  it('new gated presets (#1) have sane active params and the expected warnings', () => {
+    for (const name of ['Llama 3.2 1B', 'Llama 3.2 3B', 'Gemma 3 4B', 'Gemma 3 12B']) {
+      const m = findModelPreset(name);
+      if (!m) throw new Error(`missing preset ${name}`);
+      expect(m.activeParams, name).toBeGreaterThan(0);
+      expect(m.activeParams, name).toBe(m.params);
+      expect(m.params, name).toBeGreaterThan(0);
+    }
+    for (const name of ['Gemma 3 4B', 'Gemma 3 12B']) {
+      const m = findModelPreset(name);
+      expect(m?.warnings.some((w) => w.includes('SigLIP vision tower')), name).toBe(true);
+    }
+
+    const scout = findModelPreset('Llama 4 Scout 17B');
+    if (!scout) throw new Error('missing Llama 4 Scout 17B preset');
+    expect(scout.activeParams).toBeGreaterThan(0);
+    expect(scout.activeParams).toBeLessThan(scout.params);
+    expect(scout.warnings.some((w) => w.includes('MoE'))).toBe(true);
+    expect(scout.warnings.some((w) => w.includes('vision tower'))).toBe(true);
   });
 
   it('golden: Llama 3.3 70B preset at 128K = 40 GiB of KV', () => {

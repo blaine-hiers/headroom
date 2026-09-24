@@ -413,4 +413,75 @@ describe('App', () => {
     expect(screen.getByLabelText('GPU count')).toHaveValue(16);
     expect(screen.getByLabelText('VRAM per GPU')).toHaveValue(0.1);
   });
+
+  describe('Remember token toggle', () => {
+    it('defaults unchecked and does not persist a typed token to localStorage', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByText('Gated models'));
+      const checkbox = screen.getByRole('checkbox', { name: 'Remember token on this device' });
+      expect(checkbox).not.toBeChecked();
+
+      await user.type(screen.getByLabelText('Hugging Face token'), 'hf_test_fake');
+      expect(window.localStorage.getItem('headroom.hfToken')).toBeNull();
+    });
+
+    it('checking Remember token persists the current token', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByText('Gated models'));
+      await user.type(screen.getByLabelText('Hugging Face token'), 'hf_test_fake');
+
+      await user.click(screen.getByRole('checkbox', { name: 'Remember token on this device' }));
+      expect(window.localStorage.getItem('headroom.hfToken')).toBe('hf_test_fake');
+    });
+
+    it('unchecking Remember token after checking removes the stored token', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByText('Gated models'));
+      await user.type(screen.getByLabelText('Hugging Face token'), 'hf_test_fake');
+      const checkbox = screen.getByRole('checkbox', { name: 'Remember token on this device' });
+
+      await user.click(checkbox);
+      expect(window.localStorage.getItem('headroom.hfToken')).toBe('hf_test_fake');
+
+      await user.click(checkbox);
+      expect(window.localStorage.getItem('headroom.hfToken')).toBeNull();
+    });
+
+    it('an explicit unchecked preference does not load or keep a stale stored token', async () => {
+      // Simulates a token written back by another tab (still checked) or an older build
+      // after this tab unchecked Remember token.
+      window.localStorage.setItem('headroom.rememberToken', 'false');
+      window.localStorage.setItem('headroom.hfToken', 'hf_stale');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByText('Gated models'));
+      expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).not.toBeChecked();
+      expect(screen.getByLabelText('Hugging Face token')).toHaveValue('');
+      expect(window.localStorage.getItem('headroom.hfToken')).toBeNull();
+    });
+
+    it('starts checked when a token is already stored from before the update', async () => {
+      window.localStorage.setItem('headroom.hfToken', 'hf_test_fake');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByText('Gated models'));
+      expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).toBeChecked();
+      expect(screen.getByLabelText('Hugging Face token')).toHaveValue('hf_test_fake');
+    });
+
+    it('does not break the panel when localStorage throws', async () => {
+      const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+        throw new Error('blocked');
+      });
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByText('Gated models'));
+      expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).not.toBeChecked();
+      expect(screen.getByLabelText('Hugging Face token')).toHaveValue('');
+      getItem.mockRestore();
+    });
+  });
 });
