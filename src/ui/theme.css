@@ -739,6 +739,10 @@ input[type='range'] {
   color: var(--bad);
 }
 
+.status-line {
+  display: block;
+}
+
 .status-fetching {
   color: var(--muted);
 }

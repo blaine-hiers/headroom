@@ -245,4 +245,22 @@ describe('RepoSearch', () => {
     expect(input).toHaveValue('');
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   });
+
+  it('re-loading the id that is already loaded still clears the field (loadSeq bump)', () => {
+    const props = {
+      loadedId: 'meta-llama/Llama-3.1-8B-Instruct',
+      presets: PRESETS,
+      fetching: false,
+      onSubmit: vi.fn(),
+      onSelectPreset: vi.fn(),
+      onSelectHub: vi.fn(),
+    };
+    const { rerender } = render(<RepoSearch {...props} loadSeq={1} />);
+    const input = screen.getByLabelText('Hugging Face repo id');
+    fireEvent.change(input, { target: { value: 'Llama-3.1-8B' } });
+    expect(input).toHaveValue('Llama-3.1-8B');
+
+    rerender(<RepoSearch {...props} loadSeq={2} />);
+    expect(input).toHaveValue('');
+  });
 });

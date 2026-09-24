@@ -230,6 +230,8 @@ describe('App', () => {
       release();
     });
     expect(await within(panel).findByText(/gated or private/)).toBeInTheDocument();
+    // The Loaded line stays up beside the error, naming the model the results still describe.
+    expect(within(panel).getByRole('status')).toHaveTextContent(/Loaded: Llama 3.3 70B/);
     // The calculator keeps its last good spec.
     expect(screen.getAllByText('328 KB').length).toBeGreaterThan(0);
 

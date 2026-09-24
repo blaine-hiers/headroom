@@ -48,6 +48,8 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
   const [recents, setRecents] = useState(() => getRecents());
   const [gguf, setGguf] = useState<{ id: string; options: GgufOption[]; selected: string } | undefined>(undefined);
   const requestSeq = useRef(0);
+  // Counts this panel's own loads, so re-loading the model that is already loaded still clears the search field.
+  const [loadSeq, setLoadSeq] = useState(0);
 
   const doFetch = async (repo: string, ggufPath?: string) => {
     const id = repo.trim();
@@ -60,6 +62,7 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
       addRecent(res.spec);
       setRecents(getRecents());
       setGguf(res.gguf && { id: res.spec.id, ...res.gguf });
+      setLoadSeq((n) => n + 1);
       onLoad(res.spec);
     } else {
       setFetchState({ kind: 'error', id, error: res.error });
@@ -72,6 +75,7 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
     setGguf(undefined);
     addRecent(spec);
     setRecents(getRecents());
+    setLoadSeq((n) => n + 1);
     onLoad(spec);
   };
 
@@ -87,6 +91,7 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
       <h2 id="model-h">Model</h2>
       <RepoSearch
         loadedId={model.id}
+        loadSeq={loadSeq}
         presets={MODEL_PRESETS}
         token={token || undefined}
         fetching={fetchState.kind === 'fetching'}
@@ -95,10 +100,14 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
         onSelectHub={(id) => void doFetch(id)}
       />
 
-      <p className={`status status-${fetchState.kind}`} aria-live="polite" role="status">
-        {fetchState.kind === 'fetching' && <>Fetching {fetchState.id}…</>}
+      <p className="status" aria-live="polite" role="status">
+        {/* The Loaded line stays up while a fetch runs or fails: the results still describe this model. */}
+        <span className="muted">Loaded: </span>
+        <strong title={model.id}>{model.name}</strong> <span className="muted">· {SOURCE_LABEL[model.source]}</span>
+        {fetchState.kind === 'idle' && fetchState.note && <span className="muted"> · {fetchState.note}</span>}
+        {fetchState.kind === 'fetching' && <span className="status-line status-fetching">Fetching {fetchState.id}…</span>}
         {fetchState.kind === 'error' && (
-          <>
+          <span className="status-line status-error">
             Error: {fetchState.error}
             {fallback && (
               <>
@@ -108,14 +117,7 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
                 </button>
               </>
             )}
-          </>
-        )}
-        {fetchState.kind === 'idle' && (
-          <>
-            <span className="muted">Loaded: </span>
-            <strong title={model.id}>{model.name}</strong> <span className="muted">· {SOURCE_LABEL[model.source]}</span>
-            {fetchState.note && <span className="muted"> · {fetchState.note}</span>}
-          </>
+          </span>
         )}
       </p>
 

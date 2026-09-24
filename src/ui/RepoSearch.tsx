@@ -13,6 +13,8 @@ interface Props {
    * pick, a successful fetch, a Planner hand-off) clears it again. Typing does not feed back
    * through this prop. */
   loadedId: string;
+  /** Bumped by ModelPanel on each of its own loads, so re-loading the same id still clears the field. */
+  loadSeq?: number;
   presets: ModelSpec[];
   token?: string;
   fetching: boolean;
@@ -26,14 +28,16 @@ interface Props {
  * offline) and, ~250ms after typing stops, searches the Hub for matching repos. Selecting
  * an entry (click or Enter) runs the same fetch path as typing an id and pressing Enter.
  */
-export function RepoSearch({ loadedId, presets, token, fetching, onSubmit, onSelectPreset, onSelectHub }: Props) {
+export function RepoSearch({ loadedId, loadSeq, presets, token, fetching, onSubmit, onSelectPreset, onSelectHub }: Props) {
   const inputId = useId();
   const listId = useId();
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [hubHits, setHubHits] = useState<HubSearchHit[]>([]);
-  const [prevLoadedId, setPrevLoadedId] = useState(loadedId);
+  const loadKey = `${loadedId}
+${loadSeq ?? 0}`;
+  const [prevLoadKey, setPrevLoadKey] = useState(loadKey);
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const seqRef = useRef(0);
 
@@ -46,8 +50,8 @@ export function RepoSearch({ loadedId, presets, token, fetching, onSubmit, onSel
   // never comes back through `loadedId`, so this never fires mid-keystroke. Adjusted during
   // render (React's documented pattern for this) rather than in an effect, so it takes
   // effect in the same commit instead of triggering an extra render.
-  if (loadedId !== prevLoadedId) {
-    setPrevLoadedId(loadedId);
+  if (loadKey !== prevLoadKey) {
+    setPrevLoadKey(loadKey);
     setQuery('');
     setOpen(false);
     setActiveIndex(-1);
@@ -60,7 +64,7 @@ export function RepoSearch({ loadedId, presets, token, fetching, onSubmit, onSel
   useEffect(() => {
     cancelPendingSearch();
     return () => clearTimeout(timerRef.current);
-  }, [loadedId]);
+  }, [loadKey]);
 
   const q = query.trim();
   const presetMatches = q ? presets.filter((p) => fuzzyMatches(q, p.id, p.name)).slice(0, MAX_PRESET_MATCHES) : [];
