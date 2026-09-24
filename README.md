@@ -16,6 +16,8 @@ Headroom is a local-LLM VRAM and KV-cache calculator. Give it a Hugging Face rep
 
 It runs entirely in the browser. There is no backend and no account. The whole calculator state lives in the URL, so you can share a link to it. Results can be copied as Markdown or downloaded as CSV, and the page installs as an offline-capable app — see *Export, sharing and offline* below.
 
+The page has two tabs, **Calculator** and **Planner**. Calculator is everything above. Planner is a growing home for planning tools that hand their result to the Calculator: which model fits a task, then what hardware serves it for N users. The active tab is `?tab=planner` in the URL (Calculator is the default, so it's never written for a plain calculator link); each tab keeps its own state, so switching tabs and back loses nothing.
+
 **Live:** https://blaine-hiers.github.io/headroom/
 
 ![screenshot](docs/screenshot.png)
