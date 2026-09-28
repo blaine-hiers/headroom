@@ -56,7 +56,8 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
   // and never sync the token value itself, or we'd overwrite what this tab is typing.
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
-      if (e.key !== REMEMBER_TOKEN_KEY) return;
+      // key === null means another tab called localStorage.clear(): the pref is gone, so off.
+      if (e.key !== REMEMBER_TOKEN_KEY && e.key !== null) return;
       setRememberToken(e.newValue === 'true');
     };
     window.addEventListener('storage', onStorage);

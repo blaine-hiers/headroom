@@ -575,6 +575,22 @@ describe('App', () => {
       expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).not.toBeChecked();
     });
 
+    it('localStorage.clear() in another tab (key null) fails closed and stops future writes', async () => {
+      window.localStorage.setItem('headroom.rememberToken', 'true');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByText('Gated models'));
+      expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).toBeChecked();
+
+      window.localStorage.clear();
+      act(() => {
+        window.dispatchEvent(new StorageEvent('storage', { key: null, newValue: null }));
+      });
+      expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).not.toBeChecked();
+      await user.type(screen.getByLabelText('Hugging Face token'), 'hf_invented');
+      expect(window.localStorage.getItem('headroom.hfToken')).toBeNull();
+    });
+
     it('ignores storage events for other keys', async () => {
       const user = userEvent.setup();
       render(<App />);
