@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { activeParamsDetailed, fetchRepo, findModelPreset, formatBytes, MODEL_PRESETS } from '../lib';
 import type { Attention, GgufOption, ModelSpec, MoeSpec, NativeDtype, WeightQuantKey } from '../lib';
 import { NumberField } from './NumberField';
@@ -44,12 +44,30 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
   });
   const [token, setToken] = useState(tokenInit.token);
   const [rememberToken, setRememberToken] = useState(tokenInit.remember);
+  // Mirrors rememberToken synchronously. A storage event's setState only renders
+  // in a later task, so a write path reading the state could still see `true`
+  // for a keystroke in between; every token write checks this instead.
+  const rememberRef = useRef(tokenInit.remember);
   const [fetchState, setFetchState] = useState<FetchState>({ kind: 'idle' });
   const [recents, setRecents] = useState(() => getRecents());
   const [gguf, setGguf] = useState<{ id: string; options: GgufOption[]; selected: string } | undefined>(undefined);
   const requestSeq = useRef(0);
   // Counts this panel's own loads, so re-loading the model that is already loaded still clears the search field.
   const [loadSeq, setLoadSeq] = useState(0);
+
+  // Another tab's storage write fires this event here, but never in the tab that made it.
+  // Sync only the remember flag: never touch localStorage here (the other tab already did),
+  // and never sync the token value itself, or we'd overwrite what this tab is typing.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      // key === null means another tab called localStorage.clear(): the pref is gone, so off.
+      if (e.key !== REMEMBER_TOKEN_KEY && e.key !== null) return;
+      rememberRef.current = e.newValue === 'true';
+      setRememberToken(rememberRef.current);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   const doFetch = async (repo: string, ggufPath?: string) => {
     const id = repo.trim();
@@ -194,7 +212,7 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
             onChange={(e) => {
               const next = e.target.value;
               setToken(next);
-              if (rememberToken) writeStorage(TOKEN_KEY, next.trim());
+              if (rememberRef.current) writeStorage(TOKEN_KEY, next.trim());
             }}
           />
           <label className="check">
@@ -204,6 +222,7 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
               checked={rememberToken}
               onChange={(e) => {
                 const checked = e.target.checked;
+                rememberRef.current = checked;
                 setRememberToken(checked);
                 writeStorage(REMEMBER_TOKEN_KEY, checked ? 'true' : 'false');
                 writeStorage(TOKEN_KEY, checked ? token.trim() || null : null);
