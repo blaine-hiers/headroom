@@ -44,6 +44,10 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
   });
   const [token, setToken] = useState(tokenInit.token);
   const [rememberToken, setRememberToken] = useState(tokenInit.remember);
+  // Mirrors rememberToken synchronously. A storage event's setState only renders
+  // in a later task, so a write path reading the state could still see `true`
+  // for a keystroke in between; every token write checks this instead.
+  const rememberRef = useRef(tokenInit.remember);
   const [fetchState, setFetchState] = useState<FetchState>({ kind: 'idle' });
   const [recents, setRecents] = useState(() => getRecents());
   const [gguf, setGguf] = useState<{ id: string; options: GgufOption[]; selected: string } | undefined>(undefined);
@@ -58,7 +62,8 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
     const onStorage = (e: StorageEvent) => {
       // key === null means another tab called localStorage.clear(): the pref is gone, so off.
       if (e.key !== REMEMBER_TOKEN_KEY && e.key !== null) return;
-      setRememberToken(e.newValue === 'true');
+      rememberRef.current = e.newValue === 'true';
+      setRememberToken(rememberRef.current);
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
@@ -207,7 +212,7 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
             onChange={(e) => {
               const next = e.target.value;
               setToken(next);
-              if (rememberToken) writeStorage(TOKEN_KEY, next.trim());
+              if (rememberRef.current) writeStorage(TOKEN_KEY, next.trim());
             }}
           />
           <label className="check">
@@ -217,6 +222,7 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
               checked={rememberToken}
               onChange={(e) => {
                 const checked = e.target.checked;
+                rememberRef.current = checked;
                 setRememberToken(checked);
                 writeStorage(REMEMBER_TOKEN_KEY, checked ? 'true' : 'false');
                 writeStorage(TOKEN_KEY, checked ? token.trim() || null : null);

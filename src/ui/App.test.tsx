@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_MODEL_PRESET, encodeState, formatBytes, formatNumber, formatTokens, sizeHardware } from '../lib';
@@ -588,6 +588,28 @@ describe('App', () => {
       });
       expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).not.toBeChecked();
       await user.type(screen.getByLabelText('Hugging Face token'), 'hf_invented');
+      expect(window.localStorage.getItem('headroom.hfToken')).toBeNull();
+    });
+
+    it('a keystroke before React re-renders after a remember-off event still writes nothing', async () => {
+      window.localStorage.setItem('headroom.rememberToken', 'true');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByText('Gated models'));
+      const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+      const prev = g.IS_REACT_ACT_ENVIRONMENT;
+      g.IS_REACT_ACT_ENVIRONMENT = false;
+      try {
+        // Same task, no act(): the state update from the event hasn't rendered yet,
+        // so the token field's onChange still closes over remember === true.
+        window.dispatchEvent(new StorageEvent('storage', { key: 'headroom.rememberToken', newValue: 'false' }));
+        fireEvent.change(screen.getByLabelText('Hugging Face token'), { target: { value: 'hf_invented_race' } });
+      } finally {
+        g.IS_REACT_ACT_ENVIRONMENT = prev;
+      }
+      await waitFor(() =>
+        expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).not.toBeChecked(),
+      );
       expect(window.localStorage.getItem('headroom.hfToken')).toBeNull();
     });
 
