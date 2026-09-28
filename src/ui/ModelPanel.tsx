@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { activeParamsDetailed, fetchRepo, findModelPreset, formatBytes, MODEL_PRESETS } from '../lib';
 import type { Attention, GgufOption, ModelSpec, MoeSpec, NativeDtype, WeightQuantKey } from '../lib';
 import { NumberField } from './NumberField';
@@ -50,6 +50,18 @@ export function ModelPanel({ model, weightQuant, onLoad, onEdit }: Props) {
   const requestSeq = useRef(0);
   // Counts this panel's own loads, so re-loading the model that is already loaded still clears the search field.
   const [loadSeq, setLoadSeq] = useState(0);
+
+  // Another tab's storage write fires this event here, but never in the tab that made it.
+  // Sync only the remember flag: never touch localStorage here (the other tab already did),
+  // and never sync the token value itself, or we'd overwrite what this tab is typing.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== REMEMBER_TOKEN_KEY) return;
+      setRememberToken(e.newValue === 'true');
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   const doFetch = async (repo: string, ggufPath?: string) => {
     const id = repo.trim();

@@ -531,6 +531,62 @@ describe('App', () => {
       expect(screen.getByLabelText('Hugging Face token')).toHaveValue('');
       getItem.mockRestore();
     });
+
+    it('a storage event turning remember off in another tab unchecks the box and stops future writes (#19)', async () => {
+      window.localStorage.setItem('headroom.rememberToken', 'true');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByText('Gated models'));
+      expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).toBeChecked();
+
+      // Simulates tab B unchecking Remember token: it already removed the stored token itself.
+      window.localStorage.removeItem('headroom.hfToken');
+      act(() => {
+        window.dispatchEvent(new StorageEvent('storage', { key: 'headroom.rememberToken', newValue: 'false' }));
+      });
+      expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).not.toBeChecked();
+
+      await user.type(screen.getByLabelText('Hugging Face token'), 'hf_test_fake');
+      expect(window.localStorage.getItem('headroom.hfToken')).toBeNull();
+    });
+
+    it('a storage event turning remember on in another tab checks the box', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByText('Gated models'));
+      expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).not.toBeChecked();
+
+      act(() => {
+        window.dispatchEvent(new StorageEvent('storage', { key: 'headroom.rememberToken', newValue: 'true' }));
+      });
+      expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).toBeChecked();
+    });
+
+    it('a storage event with a null newValue (key removed) fails closed and unchecks the box', async () => {
+      window.localStorage.setItem('headroom.rememberToken', 'true');
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByText('Gated models'));
+      expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).toBeChecked();
+
+      act(() => {
+        window.dispatchEvent(new StorageEvent('storage', { key: 'headroom.rememberToken', newValue: null }));
+      });
+      expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).not.toBeChecked();
+    });
+
+    it('ignores storage events for other keys', async () => {
+      const user = userEvent.setup();
+      render(<App />);
+      await user.click(screen.getByText('Gated models'));
+      expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).not.toBeChecked();
+
+      act(() => {
+        window.dispatchEvent(new StorageEvent('storage', { key: 'headroom.hfToken', newValue: 'hf_other_tab' }));
+      });
+      expect(screen.getByRole('checkbox', { name: 'Remember token on this device' })).not.toBeChecked();
+      expect(screen.getByLabelText('Hugging Face token')).toHaveValue('');
+    });
   });
 });
 
